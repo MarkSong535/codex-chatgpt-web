@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, mkdirSync, openSync, closeSync, fsyncSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, delimiter, dirname, isAbsolute, join, resolve, sep, win32 } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, posix, resolve, sep, win32 } from "node:path";
 import { tmpdir } from "node:os";
 import type { CodexProviderConfig } from "./types";
 import { VERSION } from "./version";
@@ -372,8 +372,9 @@ export function defaultChromeExecutable(
   if (platform === "win32") {
     return win32.join(programFiles || "C:\\Program Files", "Google", "Chrome", "Application", "chrome.exe");
   }
-  const onPath = pathValue.split(delimiter).filter(Boolean)
-    .flatMap(directory => LINUX_CHROME_COMMANDS.map(command => join(directory, command)));
+  // Linux PATH semantics regardless of the host running this code (tests run it on Windows too).
+  const onPath = pathValue.split(":").filter(Boolean)
+    .flatMap(directory => LINUX_CHROME_COMMANDS.map(command => posix.join(directory, command)));
   return [...LINUX_CHROME_CANDIDATES, ...onPath, ...playwrightChromiumCandidates(playwrightRoot)]
     .find(candidate => exists(candidate) && !isSnapBrowser(candidate)) ?? LINUX_CHROME_CANDIDATES[0];
 }
