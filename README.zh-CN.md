@@ -16,7 +16,7 @@
 2. 安装运行时。Debian/Ubuntu 上可从最新发行版下载 `codex-chatgpt-web_<版本>_amd64.deb`（或 `_arm64.deb`），用 `sudo apt install ./文件名.deb` 安装（会同时安装 Xvfb 和 Chromium）。其他系统（macOS 或 Linux，x64/arm64）：
 
    ```bash
-   curl -fsSL https://github.com/miuuyy/codex-chatgpt-web/releases/latest/download/install.sh | sh
+   curl -fsSL https://github.com/MarkSong535/codex-chatgpt-web/releases/latest/download/install.sh | sh
    ```
 
 3. 设置并登录。终端会显示每个登录步骤，并在 OpenAI 要求时询问验证码：

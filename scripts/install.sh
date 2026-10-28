@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-REPOSITORY="${CODEX_CHATGPT_WEB_REPOSITORY:-miuuyy/codex-chatgpt-web}"
-VERSION="${CODEX_CHATGPT_WEB_VERSION:-6.1.14}"
+REPOSITORY="${CODEX_CHATGPT_WEB_REPOSITORY:-MarkSong535/codex-chatgpt-web}"
+VERSION="${CODEX_CHATGPT_WEB_VERSION:-1.0.0}"
 BIN_DIR="${CODEX_CHATGPT_WEB_BIN_DIR:-$HOME/.local/bin}"
 LIB_DIR="${CODEX_CHATGPT_WEB_LIB_DIR:-$HOME/.local/lib/codex-chatgpt-web}"
 DOC_DIR="${CODEX_CHATGPT_WEB_DOC_DIR:-$HOME/.local/share/doc/codex-chatgpt-web}"
@@ -26,7 +26,8 @@ sha256() {
 }
 
 ASSET="codex-chatgpt-web-$PLATFORM-$ARCH.tar.gz"
-BASE_URL="https://github.com/$REPOSITORY/releases/download/v$VERSION"
+# Releases of this headless edition are tagged vm<version> to stay apart from upstream v<version> tags.
+BASE_URL="https://github.com/$REPOSITORY/releases/download/vm$VERSION"
 TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/codex-chatgpt-web.XXXXXX")"
 STAGE_DIR="$LIB_DIR/.stage-$VERSION-$$"
 TARGET_DIR="$LIB_DIR/$VERSION"

@@ -11,7 +11,8 @@ Use GitHub's **Set as a pre-release** flag for public test builds. They remain d
 Releases but are excluded from `/releases/latest`, the endpoint the installer uses. A draft is
 private; a pre-release is the public testing option.
 
-The tag workflow marks new suffixed versions such as `v6.0.0-rc.1` as pre-releases automatically
+Release tags are `vm` followed by the `package.json` version (for example `vm1.0.0`); the publish job
+rejects any other tag. The tag workflow marks suffixed versions such as `vm1.1.0-rc.1` as pre-releases automatically
 and preserves an existing release's pre-release flag when rerun. Use a new version for changed
 binaries; toggling publication flags promotes the existing build. To keep a final version out of
 `/releases/latest` during testing, prepare a draft release with **Set as a pre-release** checked

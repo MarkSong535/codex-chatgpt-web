@@ -82,7 +82,7 @@ jobs:
           merge-multiple: true
       - name: Verify release tag matches package version
         run: |
-          expected="v$(jq -r .version package.json)"
+          expected="vm$(jq -r .version package.json)"
           test "$GITHUB_REF_NAME" = "$expected"
       - name: Add licenses and installers
         run: |

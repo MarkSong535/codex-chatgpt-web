@@ -16,7 +16,7 @@ ChatGPT アカウントで利用できる Web モデル（Pro を含む）を Co
 2. ランタイムをインストールします。Debian/Ubuntu では最新リリースの `codex-chatgpt-web_<バージョン>_amd64.deb`（または `_arm64.deb`）を `sudo apt install ./ファイル名.deb` でインストールできます（Xvfb と Chromium も入ります）。その他（macOS または Linux、x64/arm64）:
 
    ```bash
-   curl -fsSL https://github.com/miuuyy/codex-chatgpt-web/releases/latest/download/install.sh | sh
+   curl -fsSL https://github.com/MarkSong535/codex-chatgpt-web/releases/latest/download/install.sh | sh
    ```
 
 3. セットアップしてサインインします。各ステップが表示され、OpenAI が要求したときに確認コードを尋ねます:
