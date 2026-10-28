@@ -74,6 +74,7 @@ import {
   waitForChatGptEffortControl,
 } from "../../chatgpt-session";
 import { loginVerificationMarkerPath } from "../../browser-login";
+import { chromeLaunchPlan, playwrightLaunchOptions, type ChromeGpuMode } from "../../chrome-launch";
 import {
   connectLauncherBrowserHost,
   LauncherBrowserTurnCancelledError,
@@ -1111,6 +1112,7 @@ export interface ResolvedBrowserConfig {
   chromeExecutablePath: string;
   turnTimeoutMs?: number;
   headed: boolean;
+  chromeGpu?: ChromeGpuMode;
   autoApproveToolCalls: boolean;
 }
 
@@ -1891,6 +1893,7 @@ export function resolveBrowserConfig(provider: CodexProviderConfig): ResolvedBro
     chromeExecutablePath: resolve(expandUserPath(configured.chromeExecutablePath?.trim() || defaultChromeExecutable())),
     ...(turnTimeoutMs !== undefined ? { turnTimeoutMs } : {}),
     headed: configured.headed !== false,
+    ...(configured.chromeGpu ? { chromeGpu: configured.chromeGpu } : {}),
     autoApproveToolCalls: configured.autoApproveToolCalls === true,
   };
 }
@@ -2217,13 +2220,15 @@ export class ChatGptBrowserWorker {
     if (!existsSync(this.config.chromeExecutablePath)) {
       throw new Error(`Configured Chrome executable does not exist: ${this.config.chromeExecutablePath}`);
     }
-    this.browser = await chromium.launch({
-      executablePath: this.config.chromeExecutablePath,
-      headless: !this.config.headed,
-    });
+    this.browser = await this.launchManagedChrome();
     this.context = await this.browser.newContext({ storageState: this.config.storageStatePath });
     this.page = await this.context.newPage();
     return this.page;
+  }
+
+  private async launchManagedChrome(): Promise<Browser> {
+    const plan = await chromeLaunchPlan({ headed: this.config.headed, gpu: this.config.chromeGpu });
+    return await chromium.launch(playwrightLaunchOptions(plan, this.config.chromeExecutablePath));
   }
 
   private async ensureManagedBrowser(): Promise<{ browser: Browser; context: BrowserContext }> {
@@ -2235,10 +2240,7 @@ export class ChatGptBrowserWorker {
       if (!existsSync(this.config.chromeExecutablePath)) {
         throw new Error(`Configured Chrome executable does not exist: ${this.config.chromeExecutablePath}`);
       }
-      const browser = await chromium.launch({
-        executablePath: this.config.chromeExecutablePath,
-        headless: !this.config.headed,
-      });
+      const browser = await this.launchManagedChrome();
       const context = await browser.newContext({ storageState: this.config.storageStatePath });
       this.browser = browser;
       this.context = context;

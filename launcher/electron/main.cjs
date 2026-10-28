@@ -1094,6 +1094,17 @@ async function requestQuit() {
   }
 }
 
+function linuxNeedsSoftwareGpu(env = process.env) {
+  const override = env.CODEX_CHATGPT_WEB_CHROME_GPU?.trim();
+  if (override === "software") return true;
+  if (override === "hardware") return false;
+  try {
+    return !fs.readdirSync("/dev/dri").some(name => name.startsWith("renderD"));
+  } catch {
+    return true;
+  }
+}
+
 async function start() {
   const gotLock = app.requestSingleInstanceLock();
   if (!gotLock) {
@@ -1124,6 +1135,13 @@ async function start() {
   cdpPort = await findFreePort();
   if (process.platform === "linux") {
     app.commandLine.appendSwitch("class", IS_DEV_PROFILE ? "codex-web-gpt-dev" : "codex-web-gpt");
+    if (linuxNeedsSoftwareGpu()) {
+      // GPU-less hosts (servers, containers, Xvfb) render through ANGLE's SwiftShader backend.
+      app.commandLine.appendSwitch("use-gl", "angle");
+      app.commandLine.appendSwitch("use-angle", "swiftshader");
+      app.commandLine.appendSwitch("enable-unsafe-swiftshader");
+      app.commandLine.appendSwitch("ignore-gpu-blocklist");
+    }
   }
   app.commandLine.appendSwitch("remote-debugging-address", "127.0.0.1");
   app.commandLine.appendSwitch("remote-debugging-port", String(cdpPort));

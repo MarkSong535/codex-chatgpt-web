@@ -205,6 +205,45 @@ Luna and Think use rolling summaries with **Settings → Bigger Context** off. E
 Context keeps the task conversation and sends large histories in parts. If earlier details
 are lost in long Free-account chats, turn Bigger Context off and restart Codex.
 
+## Headless Linux servers, containers, and hosts without a GPU
+
+The CLI runtime can drive Google Chrome or Chromium on a Linux host with no display and no GPU.
+Install Chrome or Chromium; `/usr/bin/google-chrome`, `google-chrome-stable`, `chromium`,
+`chromium-browser`, and `/snap/bin/chromium` are found automatically, or pass `--chrome PATH`.
+Installing `Xvfb` is recommended.
+
+- **Display.** Managed Chrome runs headed by default. With no `DISPLAY` or `WAYLAND_DISPLAY`, the
+  runtime starts a private Xvfb server for it (one free display number, exits with the browser).
+  This keeps Chrome's ordinary headed user agent. Without Xvfb it falls back to Chrome's headless
+  mode with a warning. `setup --headless` always uses headless mode.
+- **GPU.** `--chrome-gpu auto` (default) renders WebGL and compositing on the CPU through
+  SwiftShader (`--use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader`) on Linux
+  hosts that lack a display or a `/dev/dri/renderD*` node. `software` forces this anywhere;
+  `hardware` leaves GPU choice to Chrome.
+- **Containers.** `--disable-dev-shm-usage` is always added on Linux, and `--no-sandbox` when
+  running as root, which Chrome otherwise refuses.
+
+Sign in on a machine that has a browser, then carry the login to the server:
+
+```bash
+codex-chatgpt-web login --export-storage-state ~/chatgpt-login.json
+```
+
+```bash
+codex-chatgpt-web setup --browser-only --import-login ~/chatgpt-login.json --acknowledge-unofficial
+```
+
+The exported file grants access to your ChatGPT account. Copy it only to a host you trust and
+delete it after the import. An existing installation can refresh its login with
+`codex-chatgpt-web login --import-login FILE`. The import keeps only ChatGPT/OpenAI cookies and
+verifies the session in Chrome before saving it.
+
+Environment overrides for the daemon: `CODEX_CHATGPT_WEB_HEADLESS=1`,
+`CODEX_CHATGPT_WEB_XVFB=0` (never start Xvfb), `CODEX_CHATGPT_WEB_CHROME_GPU=software|hardware`,
+and `CODEX_CHATGPT_WEB_CHROME_ARGS` (extra space-separated Chrome flags). The Electron launcher
+also honors `CODEX_CHATGPT_WEB_CHROME_GPU` and uses SwiftShader automatically on Linux without a
+render node; run it under `xvfb-run -a` on a host without a display.
+
 ## Personalization or connector controls are not found
 
 Current builds always use ordinary ChatGPT chats, including connector verification. If an older

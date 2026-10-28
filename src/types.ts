@@ -297,6 +297,8 @@ export interface CodexProviderConfig {
     stallTimeoutSec?: number;
     /** Keep the single controlled browser visible. */
     headed?: boolean;
+    /** Managed Chrome GPU backend: auto, hardware, or SwiftShader software rendering. */
+    chromeGpu?: "auto" | "hardware" | "software";
     /** Attach the turn-bound Codex MCP capability for every connector-capable Web model. */
     localToolsEnabled?: boolean;
     /** Account capability proven by the authenticated browser probe. */

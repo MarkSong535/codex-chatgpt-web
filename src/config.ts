@@ -9,6 +9,7 @@ import {
 } from "./chatgpt-web-models";
 import type { CodexProviderConfig } from "./types";
 import { VERSION } from "./version";
+import { parseChromeGpuMode, type ChromeGpuMode } from "./chrome-launch";
 
 export type RuntimeMode = "browser-only" | "full";
 export type BrowserHostMode = "managed-chrome" | "launcher";
@@ -114,6 +115,8 @@ export interface AppConfig {
   storageStatePath: string;
   brokerSocketPath: string;
   headed: boolean;
+  /** Managed Chrome GPU backend; `auto` uses SwiftShader on GPU-less or display-less Linux hosts. */
+  chromeGpu?: ChromeGpuMode;
   solAvailable: boolean;
   extraHighAvailable?: boolean;
   proAvailable: boolean;
@@ -364,9 +367,19 @@ export function assertDurableRuntimeCommand(command: string[]): void {
   if (!existsSync(executable)) throw new Error(`Runtime executable does not exist: ${executable}`);
 }
 
+const LINUX_CHROME_CANDIDATES = [
+  "/usr/bin/google-chrome",
+  "/usr/bin/google-chrome-stable",
+  "/opt/google/chrome/chrome",
+  "/usr/bin/chromium",
+  "/usr/bin/chromium-browser",
+  "/snap/bin/chromium",
+] as const;
+
 export function defaultChromeExecutable(
   platform = process.platform,
   programFiles = process.env.PROGRAMFILES,
+  exists: (path: string) => boolean = existsSync,
 ): string {
   if (platform === "darwin") {
     return "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -374,7 +387,7 @@ export function defaultChromeExecutable(
   if (platform === "win32") {
     return win32.join(programFiles || "C:\\Program Files", "Google", "Chrome", "Application", "chrome.exe");
   }
-  return "/usr/bin/google-chrome";
+  return LINUX_CHROME_CANDIDATES.find(candidate => exists(candidate)) ?? LINUX_CHROME_CANDIDATES[0];
 }
 
 export function loadConfig(): AppConfig {
@@ -440,6 +453,7 @@ function parseConfig(value: unknown, path: string): AppConfig {
     throw new Error(`Invalid contextWindow in ${path}`);
   }
   if (typeof parsed.headed !== "boolean") throw new Error(`Invalid headed in ${path}`);
+  if (parsed.chromeGpu !== undefined) parseChromeGpuMode(parsed.chromeGpu, `chromeGpu in ${path}`);
   if (typeof parsed.autoApproveToolCalls !== "boolean") {
     throw new Error(`Invalid autoApproveToolCalls in ${path}`);
   }
@@ -636,6 +650,7 @@ export function providerConfig(config: AppConfig): CodexProviderConfig {
       threadEnvironmentStatePath: join(getConfigDir(), "runtime", "thread-environments.json"),
       lunaCheckpointStatePath: join(getConfigDir(), "runtime", "luna-checkpoints.json"),
       headed: config.headed,
+      ...(config.chromeGpu ? { chromeGpu: config.chromeGpu } : {}),
       localToolsEnabled: config.mode === "full",
       solAvailable: manual ? false : config.solAvailable,
       extraHighAvailable: !manual && config.extraHighAvailable === true,

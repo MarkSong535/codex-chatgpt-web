@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   browserLoginStateExists,
   captureSystemBrowserLogin,
+  importBrowserLogin,
   loginToChatGpt,
   loginVerificationMarkerPath,
   sanitizeBrowserLoginStorageState,
@@ -20,7 +21,10 @@ test("login starts with normal Chrome and captures state in a headed Keychain-aw
   writeFileSync(executable, "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$CODEX_LOGIN_ARG_LOG\"\n", { mode: 0o700 });
   chmodSync(executable, 0o700);
   const previousLog = process.env.CODEX_LOGIN_ARG_LOG;
+  const previousDisplay = process.env.DISPLAY;
   process.env.CODEX_LOGIN_ARG_LOG = argsLog;
+  // Interactive login requires a display; CI's Linux runner has none.
+  if (process.platform === "linux" && !process.env.WAYLAND_DISPLAY) process.env.DISPLAY ||= ":99";
   try {
     const config = defaultConfig("browser-only");
     config.chromeExecutablePath = executable;
@@ -37,6 +41,8 @@ test("login starts with normal Chrome and captures state in a headed Keychain-aw
   } finally {
     if (previousLog === undefined) delete process.env.CODEX_LOGIN_ARG_LOG;
     else process.env.CODEX_LOGIN_ARG_LOG = previousLog;
+    if (previousDisplay === undefined) delete process.env.DISPLAY;
+    else process.env.DISPLAY = previousDisplay;
     rmSync(root, { recursive: true, force: true });
   }
 });
@@ -146,6 +152,52 @@ test("a storage-state file is not trusted without a verification marker", () => 
       { mode: 0o600 },
     );
     expect(browserLoginStateExists(config)).toBe(true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("interactive login on a display-less Linux host points to login export and import", async () => {
+  if (process.platform !== "linux") return;
+  const root = mkdtempSync(join(tmpdir(), "codex-chatgpt-web-headless-login-"));
+  const previous = { DISPLAY: process.env.DISPLAY, WAYLAND_DISPLAY: process.env.WAYLAND_DISPLAY };
+  delete process.env.DISPLAY;
+  delete process.env.WAYLAND_DISPLAY;
+  try {
+    const executable = join(root, "fake-chrome");
+    writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    const config = defaultConfig("browser-only");
+    config.chromeExecutablePath = executable;
+    config.storageStatePath = join(root, "browser", "storage-state.json");
+    await expect(loginToChatGpt(config)).rejects.toThrow("--import-login");
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("login import rejects files that are not ChatGPT storage state", async () => {
+  if (process.platform === "win32") return;
+  const root = mkdtempSync(join(tmpdir(), "codex-chatgpt-web-import-login-"));
+  try {
+    const executable = join(root, "fake-chrome");
+    writeFileSync(executable, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    const config = defaultConfig("browser-only");
+    config.chromeExecutablePath = executable;
+    config.storageStatePath = join(root, "browser", "storage-state.json");
+    const malformed = join(root, "malformed.json");
+    writeFileSync(malformed, JSON.stringify({ cookies: "nope" }));
+    await expect(importBrowserLogin(config, malformed)).rejects.toThrow("not a Playwright storage-state file");
+    const foreign = join(root, "foreign.json");
+    writeFileSync(foreign, JSON.stringify({
+      cookies: [{ name: "sid", value: "x", domain: ".example.com", path: "/", expires: -1, httpOnly: true, secure: true, sameSite: "Lax" }],
+      origins: [],
+    }));
+    await expect(importBrowserLogin(config, foreign)).rejects.toThrow("contains no ChatGPT/OpenAI cookies");
+    expect(existsSync(config.storageStatePath)).toBe(false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

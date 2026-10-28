@@ -1,9 +1,11 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { chromium, type BrowserContext, type BrowserContextOptions } from "playwright-core";
 import type { AppConfig } from "./config";
 import { atomicWriteFile } from "./config";
+import { chromeLaunchPlan, currentChromeHostFacts, hasGraphicalDisplay, playwrightLaunchOptions } from "./chrome-launch";
 import {
   assertAuthenticatedChatGptPage,
   assertNewChatPage,
@@ -158,11 +160,10 @@ async function inspectStoredState(
   config: AppConfig,
   storageState: NonNullable<BrowserContextOptions["storageState"]>,
 ): Promise<ChatGptWebAccountCapabilities & { url: string }> {
+  const plan = await chromeLaunchPlan({ headed: config.headed, gpu: config.chromeGpu });
   const verifierBrowser = await chromium.launch({
-    executablePath: config.chromeExecutablePath,
-    headless: false,
+    ...playwrightLaunchOptions(plan, config.chromeExecutablePath, ["--no-first-run", "--no-default-browser-check"]),
     ignoreDefaultArgs: ["--password-store=basic", "--use-mock-keychain"],
-    args: ["--no-first-run", "--no-default-browser-check"],
   });
   try {
     const verifierContext = await verifierBrowser.newContext({ storageState });
@@ -381,6 +382,14 @@ export async function loginToChatGpt(
   if (!existsSync(config.chromeExecutablePath)) {
     throw new Error(`Google Chrome was not found at ${config.chromeExecutablePath}. Pass --chrome with its executable path.`);
   }
+  if (!hasGraphicalDisplay(currentChromeHostFacts())) {
+    throw new Error(
+      "Interactive ChatGPT sign-in needs a display, and this Linux host has neither DISPLAY nor WAYLAND_DISPLAY. "
+      + "On a machine with a browser run `codex-chatgpt-web login --export-storage-state FILE`, copy FILE here, "
+      + "then pass it with --import-login FILE. Alternatively sign in through a remote display (ssh -X or VNC).",
+    );
+  }
+  const plan = await chromeLaunchPlan({ headed: true, gpu: config.chromeGpu });
   const profileDir = join(dirname(config.storageStatePath), "login-profile");
   mkdirSync(profileDir, { recursive: true, mode: 0o700 });
   process.stdout.write(
@@ -392,8 +401,9 @@ export async function loginToChatGpt(
     "--disable-background-mode",
     "--no-first-run",
     "--no-default-browser-check",
+    ...plan.args,
     CHATGPT_NEW_CHAT_URL,
-  ], { env: process.env, stdio: "ignore" });
+  ], { env: plan.env ?? process.env, stdio: "ignore" });
   const loginExit = await new Promise<number>((resolveExit, rejectExit) => {
     loginBrowser.once("error", rejectExit);
     loginBrowser.once("exit", (code, signal) => {
@@ -404,10 +414,8 @@ export async function loginToChatGpt(
   if (loginExit !== 0) throw new Error(`Normal Chrome login window exited with status ${loginExit}`);
 
   const context = await chromium.launchPersistentContext(profileDir, {
-    executablePath: config.chromeExecutablePath,
-    headless: false,
+    ...playwrightLaunchOptions(plan, config.chromeExecutablePath, ["--no-first-run", "--no-default-browser-check"]),
     ignoreDefaultArgs: ["--password-store=basic", "--use-mock-keychain"],
-    args: ["--no-first-run", "--no-default-browser-check"],
   });
   try {
     const page = context.pages()[0] ?? await context.newPage();
@@ -441,6 +449,61 @@ export async function loginToChatGpt(
   }
 }
 
+function isStorageStateFile(value: unknown): value is BrowserLoginStorageState {
+  if (!value || typeof value !== "object") return false;
+  const { cookies, origins } = value as { cookies?: unknown; origins?: unknown };
+  return Array.isArray(cookies)
+    && cookies.every(cookie => cookie && typeof cookie === "object"
+      && ["name", "value", "domain", "path"].every(key => typeof (cookie as Record<string, unknown>)[key] === "string"))
+    && Array.isArray(origins)
+    && origins.every(origin => origin && typeof origin === "object"
+      && typeof (origin as { origin?: unknown }).origin === "string"
+      && Array.isArray((origin as { localStorage?: unknown }).localStorage));
+}
+
+/**
+ * Adopts a ChatGPT login captured on another machine, for hosts without a display. The state is
+ * reduced to ChatGPT/OpenAI cookies and verified against a live authenticated page before use.
+ */
+export async function importBrowserLogin(config: AppConfig, sourcePath: string): Promise<BrowserLoginResult> {
+  if (!existsSync(config.chromeExecutablePath)) {
+    throw new Error(`Google Chrome was not found at ${config.chromeExecutablePath}. Pass --chrome with its executable path.`);
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(sourcePath, "utf8"));
+  } catch (error) {
+    throw new Error(`Could not read ChatGPT login state ${sourcePath}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!isStorageStateFile(raw)) {
+    throw new Error(`${sourcePath} is not a Playwright storage-state file with cookies and origins`);
+  }
+  const state = sanitizeBrowserLoginStorageState(raw);
+  if (state.cookies.length === 0) throw new Error(`${sourcePath} contains no ChatGPT/OpenAI cookies`);
+  const inspected = await inspectStoredState(config, state);
+  atomicWriteFile(config.storageStatePath, `${JSON.stringify(state)}\n`);
+  writeVerificationMarker(config.storageStatePath, inspected);
+  return {
+    storageStatePath: config.storageStatePath,
+    accountSurfaceUrl: inspected.url,
+    solAvailable: inspected.solAvailable,
+    extraHighAvailable: inspected.extraHighAvailable === true,
+    proAvailable: inspected.proAvailable,
+  };
+}
+
+/** Interactive sign-in on a machine with a display, written to a file for --import-login elsewhere. */
+export async function exportBrowserLogin(config: AppConfig, destinationPath: string): Promise<BrowserLoginResult> {
+  const workDir = mkdtempSync(join(tmpdir(), "codex-chatgpt-web-login-"));
+  try {
+    const login = await loginToChatGpt({ ...config, storageStatePath: join(workDir, "storage-state.json") });
+    atomicWriteFile(destinationPath, readFileSync(login.storageStatePath), { protectDirectory: false });
+    return { ...login, storageStatePath: destinationPath };
+  } finally {
+    rmSync(workDir, { recursive: true, force: true });
+  }
+}
+
 export function browserLoginStateExists(config: AppConfig): boolean {
   if (!existsSync(config.storageStatePath)) return false;
   const markerPath = loginVerificationMarkerPath(config.storageStatePath);
@@ -455,11 +518,10 @@ export function browserLoginStateExists(config: AppConfig): boolean {
 
 export async function checkBrowserEngine(config: AppConfig): Promise<void> {
   if (!existsSync(config.chromeExecutablePath)) throw new Error(`Google Chrome was not found at ${config.chromeExecutablePath}`);
-  const browser = await chromium.launch({
-    executablePath: config.chromeExecutablePath,
-    headless: true,
-    args: ["--no-first-run", "--no-default-browser-check"],
-  });
+  const plan = await chromeLaunchPlan({ headed: false, gpu: config.chromeGpu });
+  const browser = await chromium.launch(
+    playwrightLaunchOptions(plan, config.chromeExecutablePath, ["--no-first-run", "--no-default-browser-check"]),
+  );
   try {
     const page = await browser.newPage();
     await page.goto("about:blank");

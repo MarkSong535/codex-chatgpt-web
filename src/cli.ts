@@ -3,9 +3,16 @@ import { createInterface } from "node:readline/promises";
 import { Writable } from "node:stream";
 import { timingSafeEqual } from "node:crypto";
 import { existsSync, rmSync } from "node:fs";
-import { isAbsolute } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import { stdin, stdout } from "node:process";
-import { captureSystemBrowserLoginToFile, checkBrowserEngine, loginToChatGpt } from "./browser-login";
+import {
+  captureSystemBrowserLoginToFile,
+  checkBrowserEngine,
+  exportBrowserLogin,
+  importBrowserLogin,
+  loginToChatGpt,
+} from "./browser-login";
+import { parseChromeGpuMode } from "./chrome-launch";
 import { defaultConfig, getConfigDir, getConfigPath, loadConfig, loadConfigForSetup } from "./config";
 import {
   inspectLauncherBrowserHost,
@@ -38,7 +45,8 @@ Focused ChatGPT web-backed models for the native Codex harness.
 Usage:
   codex-chatgpt-web setup --browser-only [options]
   codex-chatgpt-web setup --full --tunnel-id ID --runtime-key-file PATH [options]
-  codex-chatgpt-web login
+  codex-chatgpt-web login [--import-login PATH]
+  codex-chatgpt-web login --export-storage-state PATH [--chrome PATH]
   codex-chatgpt-web doctor [--json]
   codex-chatgpt-web route <status|connect|disconnect>
   codex-chatgpt-web subagents <status|compatibility-v1|native>
@@ -66,6 +74,11 @@ Setup options:
   --zero-risk-default          Zero Risk: install only the default model row
   --port NUMBER                Loopback Responses port (default: 17841)
   --chrome PATH                Google Chrome/Chromium executable used for account login
+  --headless                   Run managed Chrome without a window (Chrome's new headless mode)
+  --headed                     Run managed Chrome with a window; on Linux without a display it
+                               uses a private Xvfb server when installed (default)
+  --chrome-gpu MODE            auto (default), hardware, or software (SwiftShader, no GPU needed)
+  --import-login PATH          Use a ChatGPT login exported with login --export-storage-state
   --browser-host-descriptor PATH
                                Use the embedded launcher browser described by this owner-only file
   --refresh-account-capabilities
@@ -230,12 +243,28 @@ function launcherLoginContinuation(): { promise: Promise<void>; close: () => voi
 async function loginCommand(args: string[]): Promise<void> {
   const launcherControl = takeFlag(args, "--launcher-control");
   if (!launcherControl) {
+    const exportPath = takeOption(args, "--export-storage-state");
+    if (exportPath) {
+      const chrome = takeOption(args, "--chrome");
+      assertNoArgs(args);
+      const config = existsSync(getConfigPath()) ? loadConfig() : defaultConfig();
+      if (chrome) config.chromeExecutablePath = resolve(chrome);
+      const result = await exportBrowserLogin(config, resolve(exportPath));
+      stdout.write(
+        `ChatGPT login exported to ${result.storageStatePath}. It grants access to your ChatGPT account; `
+        + "copy it only to a trusted host, import it with --import-login, then delete it.\n",
+      );
+      return;
+    }
+    const importPath = takeOption(args, "--import-login");
     assertNoArgs(args);
     const config = loadConfig();
     if (config.browserHost === "launcher") {
       throw new Error("ChatGPT login is owned by the launcher; open Codex Web GPT and use its Sign in step");
     }
-    const result = await loginToChatGpt(config);
+    const result = importPath
+      ? await importBrowserLogin(config, resolve(importPath))
+      : await loginToChatGpt(config);
     stdout.write(`ChatGPT login stored at ${result.storageStatePath}\n`);
     return;
   }
@@ -303,6 +332,14 @@ async function setupCommand(args: string[]): Promise<void> {
   const browserHostDescriptorPath = takeOption(args, "--browser-host-descriptor");
   if (chrome) options.chromeExecutablePath = chrome;
   if (browserHostDescriptorPath) options.browserHostDescriptorPath = browserHostDescriptorPath;
+  const headless = takeFlag(args, "--headless");
+  const headed = takeFlag(args, "--headed");
+  if (headless && headed) throw new Error("Choose at most one of --headless or --headed");
+  if (headless || headed) options.headed = headed;
+  const chromeGpu = takeOption(args, "--chrome-gpu");
+  if (chromeGpu !== undefined) options.chromeGpu = parseChromeGpuMode(chromeGpu, "--chrome-gpu");
+  const importLogin = takeOption(args, "--import-login");
+  if (importLogin) options.importLoginPath = resolve(importLogin);
   options.refreshAccountCapabilities = takeFlag(args, "--refresh-account-capabilities");
   if (tunnelId) options.tunnelId = tunnelId;
   if (runtimeKeyFile) options.runtimeKeyFile = runtimeKeyFile;

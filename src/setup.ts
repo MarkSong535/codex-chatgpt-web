@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import type { AppConfig, BrowserInteractionMode, RuntimeMode, SubagentProtocol } from "./config";
+import type { ChromeGpuMode } from "./chrome-launch";
 import {
   currentRuntimeCommand,
   defaultBrokerEndpoint,
@@ -15,6 +16,7 @@ import {
 } from "./config";
 import {
   browserLoginStateExists,
+  importBrowserLogin,
   inspectBrowserLoginCapabilities,
   loginToChatGpt,
   storedBrowserLoginCapabilities,
@@ -49,9 +51,14 @@ export interface SetupOptions {
   subagentProtocol?: SubagentProtocol;
   port?: number;
   chromeExecutablePath?: string;
+  /** Run managed Chrome with a visible window (on a private Xvfb display when none exists). */
+  headed?: boolean;
+  chromeGpu?: ChromeGpuMode;
   browserHostDescriptorPath?: string;
   refreshAccountCapabilities?: boolean;
   forceLogin?: boolean;
+  /** Playwright storage state captured elsewhere with `login --export-storage-state`. */
+  importLoginPath?: string;
   autoApproveToolCalls?: boolean;
   experimentalBiggerContext?: boolean;
   composerPredictionsEnabled?: boolean;
@@ -145,6 +152,7 @@ function meaningfulRuntimeChange(before: AppConfig, after: AppConfig): boolean {
     storageStatePath: before.storageStatePath,
     brokerSocketPath: before.brokerSocketPath,
     headed: before.headed,
+    chromeGpu: before.chromeGpu,
     solAvailable: before.solAvailable,
     extraHighAvailable: before.extraHighAvailable,
     proAvailable: before.proAvailable,
@@ -176,6 +184,7 @@ function meaningfulRuntimeChange(before: AppConfig, after: AppConfig): boolean {
     storageStatePath: after.storageStatePath,
     brokerSocketPath: after.brokerSocketPath,
     headed: after.headed,
+    chromeGpu: after.chromeGpu,
     solAvailable: after.solAvailable,
     extraHighAvailable: after.extraHighAvailable,
     proAvailable: after.proAvailable,
@@ -287,6 +296,8 @@ function baseConfig(
     config.port = options.port;
   }
   if (options.chromeExecutablePath) config.chromeExecutablePath = options.chromeExecutablePath;
+  if (options.headed !== undefined) config.headed = options.headed;
+  if (options.chromeGpu !== undefined) config.chromeGpu = options.chromeGpu;
   if (options.browserHostDescriptorPath) {
     config.browserHost = "launcher";
     config.browserHostDescriptorPath = options.browserHostDescriptorPath;
@@ -321,8 +332,8 @@ function baseConfig(
     if (options.refreshAccountCapabilities) {
       throw new Error("Zero Risk cannot refresh account capabilities");
     }
-    if (options.forceLogin) {
-      throw new Error("Zero Risk uses the launcher's existing ChatGPT session; --login is unavailable");
+    if (options.forceLogin || options.importLoginPath) {
+      throw new Error("Zero Risk uses the launcher's existing ChatGPT session; --login and --import-login are unavailable");
     }
     if (options.experimentalSkillAttachments === true) {
       throw new Error("Zero Risk does not support Skills as files");
@@ -553,7 +564,9 @@ export async function setup(options: SetupOptions): Promise<SetupResult> {
     // The generic manual route is independent of account capabilities. The launcher may open the
     // authenticated surface, but setup must not inspect its model selector or infer availability.
   } else if (config.browserHost === "launcher") {
-    if (options.forceLogin) throw new Error("Launcher browser login is owned by the launcher UI; --login cannot replace it");
+    if (options.forceLogin || options.importLoginPath) {
+      throw new Error("Launcher browser login is owned by the launcher UI; --login and --import-login cannot replace it");
+    }
     const capabilities = await inspectLauncherCapabilities(
       config,
       existing,
@@ -568,7 +581,7 @@ export async function setup(options: SetupOptions): Promise<SetupResult> {
     solAvailable = stored.solAvailable;
     extraHighAvailable = stored.extraHighAvailable;
     proAvailable = stored.proAvailable;
-    const loginRequired = options.forceLogin || !browserLoginStateExists(config);
+    const loginRequired = options.forceLogin || Boolean(options.importLoginPath) || !browserLoginStateExists(config);
     const capabilityProbeRequired = !loginRequired
       && (options.refreshAccountCapabilities === true
         || existing?.browserInteractionMode === "manual"
@@ -583,7 +596,9 @@ export async function setup(options: SetupOptions): Promise<SetupResult> {
     }
     if (beforeService.loaded && (loginRequired || capabilityProbeRequired) && existing) await assertServiceIdle(existing);
     if (loginRequired) {
-      const login = await loginToChatGpt(config);
+      const login = options.importLoginPath
+        ? await importBrowserLogin(config, options.importLoginPath)
+        : await loginToChatGpt(config);
       solAvailable = login.solAvailable;
       extraHighAvailable = login.extraHighAvailable;
       proAvailable = login.proAvailable;
@@ -599,7 +614,8 @@ export async function setup(options: SetupOptions): Promise<SetupResult> {
   config.extraHighAvailable = config.solAvailable && extraHighAvailable === true;
   config.proAvailable = config.solAvailable && proAvailable === true;
   const explicitTunnelChange = Boolean(options.tunnelId || options.runtimeKeyFile || options.runtimeKeyValue);
-  const preliminaryChange = Boolean(existing && (meaningfulRuntimeChange(existing, config) || explicitTunnelChange || options.forceLogin));
+  const preliminaryChange = Boolean(existing && (meaningfulRuntimeChange(existing, config) || explicitTunnelChange || options.forceLogin
+    || options.importLoginPath));
   if (beforeService.loaded && preliminaryChange && !options.restartService) {
     throw new Error(
       "The daemon is currently serving a Codex task and setup would change its runtime. "
