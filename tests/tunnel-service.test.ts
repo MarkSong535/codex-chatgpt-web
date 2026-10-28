@@ -68,7 +68,7 @@ describe("tunnel launchd ownership", () => {
       tunnelId: "tunnel_0123456789abcdef0123456789abcdef",
     });
 
-    const definition = tunnelServiceDefinition(config);
+    const definition = tunnelServiceDefinition(config, "darwin");
     expect(definition).toContain("<string>run</string>");
     expect(definition).toContain(`<string>${config.tunnel.profileDir}</string>`);
     expect(definition).toContain("<key>RunAtLoad</key>\n  <true/>");
@@ -78,6 +78,30 @@ describe("tunnel launchd ownership", () => {
     expect(definition).not.toContain("/bin/sh");
     expect(definition).not.toContain(config.tunnel.tunnelId);
     expect(definition).not.toContain(key);
+  });
+
+  // systemd units escape backslashes, so Windows-style fixture paths would not appear verbatim.
+  test.skipIf(process.platform === "win32")("on Linux runs the pinned client as a restarting systemd user unit", () => {
+    const root = join(tmpdir(), `codex-chatgpt-web-tunnel-systemd-${process.pid}-${Date.now()}`);
+    roots.push(root);
+    process.env.CODEX_CHATGPT_WEB_HOME = root;
+    const binary = join(root, "bin", "tunnel-client");
+    const key = join(root, "secrets", "runtime.key");
+    const config = defaultConfig("full");
+    config.tunnel = createTunnelConfig({
+      binaryPath: binary,
+      runtimeKeyFile: key,
+      tunnelId: "tunnel_0123456789abcdef0123456789abcdef",
+    });
+
+    const unit = tunnelServiceDefinition(config, "linux");
+    expect(unit).toContain(`ExecStart="${binary}" "run" "--profile-dir" "${config.tunnel.profileDir}" "--profile" "${config.tunnel.profileName}"`);
+    expect(unit).toContain('Environment="MCP_STDIO_SEND_INITIALIZED_NOTIFICATION=true"');
+    expect(unit).toContain("Restart=always");
+    expect(unit).toContain("WantedBy=default.target");
+    expect(unit).toContain(`StandardError=append:${join(root, "logs", "tunnel.stderr.log")}`);
+    expect(unit).not.toContain(config.tunnel.tunnelId);
+    expect(unit).not.toContain(key);
   });
 
   test("restarts the long-lived MCP worker when the installed release changes", () => {

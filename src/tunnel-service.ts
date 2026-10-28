@@ -79,8 +79,8 @@ function tunnelSystemdUnit(config: AppConfig): string {
   });
 }
 
-export function tunnelServiceDefinition(config: AppConfig): string {
-  if (process.platform === "linux") return tunnelSystemdUnit(config);
+export function tunnelServiceDefinition(config: AppConfig, platform: NodeJS.Platform = process.platform): string {
+  if (platform === "linux") return tunnelSystemdUnit(config);
   const logDir = join(getConfigDir(), "logs");
   const args = tunnelArgs(config);
   return `<?xml version="1.0" encoding="UTF-8"?>

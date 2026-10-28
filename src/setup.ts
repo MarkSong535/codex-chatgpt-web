@@ -308,15 +308,16 @@ async function bootstrapTunnelProfile(config: AppConfig): Promise<void> {
 }
 
 function prepareSetup(options: SetupOptions): PreparedSetup {
-  if (process.platform !== "darwin" && process.platform !== "linux") {
-    throw new Error("Setup supports macOS and Linux hosts");
-  }
   const existing = loadExistingConfig();
   const config = baseConfig(existing, {
     ...options,
     subagentProtocol: options.subagentProtocol
       ?? readCodexSubagentProtocol(existing?.subagentProtocol ?? "compatibility-v1"),
   });
+  // Option errors come first so they are reported on every platform.
+  if (process.platform !== "darwin" && process.platform !== "linux") {
+    throw new Error("Setup supports macOS and Linux hosts");
+  }
   return { existing, config };
 }
 
