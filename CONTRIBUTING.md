@@ -11,8 +11,8 @@ include isolated bug fixes, regression tests, documentation corrections, and nar
 platform-specific fixes.
 
 Before opening a bug report, work through [TROUBLESHOOTING.md](TROUBLESHOOTING.md) and use the
-structured issue form. Reproduce once on the latest release and attach the privacy-safe export from
-**Activity → Export safe log**; never upload raw browser state, credentials, or unredacted logs.
+structured issue form. Reproduce once on the latest release and include the relevant daemon log lines with private data
+removed; never upload raw browser state, credentials, or unredacted logs.
 
 Large feature branches, broad refactors, rewrites, new providers, and changes to core behavior or
 architecture are generally not accepted. In rare cases they may be considered, but discuss the
@@ -37,18 +37,14 @@ work went into it.
 
 ## Before opening a pull request
 
-1. Run `bun install --frozen-lockfile` in the repository root and in `launcher/`.
+1. Run `bun install --frozen-lockfile`.
 2. Run `bun run verify`.
 3. Add a focused regression test for behavior changes.
 4. For browser UI changes, include the observed DOM evidence and a reproducible fixture. Do not
    broaden selectors speculatively.
 5. Keep Terms and trademark claims factual. Do not market the project as a quota or rate-limit
    bypass.
-6. Manually test the affected behavior. DEV mode is sufficient only when the change does not affect
-   local-tool execution, MCP execution, or the outer Codex agent loop. Execution changes require a
-   real installed Codex integration; DEV simulation is not end-to-end acceptance evidence.
+6. Manually test the affected behavior against a real installed Codex integration. Sign-in changes
+   must be tried with both a typed code and a TOTP secret.
 
-Launcher changes must preserve native packaging on macOS, Windows, and Linux. Platform packages
-must be built on their matching operating system. See [DEV chat mode](docs/dev-chat.md) for isolated
-browser and MCP development, and [release validation](docs/release-validation.md) for the required
-account-bound release checks.
+See [release validation](docs/release-validation.md) for the required account-bound release checks.

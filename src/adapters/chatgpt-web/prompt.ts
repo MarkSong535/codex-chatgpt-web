@@ -1,10 +1,9 @@
 import { createHash } from "node:crypto";
-import { CHATGPT_CONNECTOR_NAME, ZERO_RISK_CHATGPT_CONNECTOR_NAME } from "../../config";
+import { CHATGPT_CONNECTOR_NAME } from "../../config";
 import { selectedSkillFile, skillFileTokens, type ChatGptSkillFile } from "./skill-attachments";
 import {
   CHATGPT_WEB_GPT6_INSTANT_BIGGER_CONTEXT_ERROR,
   chatGptWebImageTokenReserve,
-  isChatGptWebZeroRiskBackendModel,
   resolveChatGptWebMessageTokenBudget,
   resolveChatGptWebStagingTokenBudget,
   resolveChatGptWebTransportLimits,
@@ -55,12 +54,6 @@ export interface CompileChatGptWebPromptOptions {
   experimentalMultipartParts?: ChatGptWebMultipartPartCount;
   /** Capture only when preparing a real browser submission, not during budget-planning probes. */
   includeContextTokenBreakdown?: boolean;
-  /**
-   * Manual Zero Risk transport keeps ChatGPT model/effort selection and prompt submission under the
-   * user's control. The browser bridge may open the owned tab and copy this prompt, but it never
-   * reads or mutates ChatGPT's DOM. Completion is accepted only through the bound Zero Risk MCP tools.
-   */
-  manualControl?: true;
 }
 
 export const CHATGPT_BIGGER_CONTEXT_PARTS = 6 as const;
@@ -464,7 +457,6 @@ export function chatGptReadOnlyContextWarning(
   parsed: CodexParsedRequest,
   capabilities: ChatGptWebCapabilities,
 ): string | undefined {
-  if (isChatGptWebZeroRiskBackendModel(parsed.modelId)) return undefined;
   const mode = resolveChatGptWebModelMode(parsed.modelId, parsed.options.reasoning, capabilities);
   if (mode.localTools) return undefined;
   const label = mode.effort === "max" ? "ChatGPT Pro" : `ChatGPT Web ${mode.displayLabel}`;
@@ -487,27 +479,12 @@ export function compileChatGptWebPrompt(
   turnToken?: string,
   options?: CompileChatGptWebPromptOptions,
 ): CompiledChatGptWebPrompt {
-  const manualControl = options?.manualControl === true;
-  const appName = options?.appName?.trim()
-    || (manualControl ? ZERO_RISK_CHATGPT_CONNECTOR_NAME : CHATGPT_CONNECTOR_NAME);
+  const appName = options?.appName?.trim() || CHATGPT_CONNECTOR_NAME;
   const attachSkills = options?.experimentalSkillAttachments === true;
-  if (attachSkills && (manualControl || isChatGptWebZeroRiskBackendModel(parsed.modelId))) {
-    throw new Error("Skills as files is unavailable in Zero Risk mode");
-  }
-  const mode = manualControl
-    ? { localTools: true, effort: "low" as const, displayLabel: "Zero Risk" as const }
-    : resolveChatGptWebModelMode(parsed.modelId, parsed.options.reasoning, capabilities);
+  const mode = resolveChatGptWebModelMode(parsed.modelId, parsed.options.reasoning, capabilities);
   const captureLunaCheckpoint = options?.captureLunaCheckpoint === true;
   const multipartParts = options?.experimentalMultipartParts;
   const multipartEnabled = multipartParts !== undefined;
-  if (manualControl) {
-    if (!capabilities.localToolsEnabled) {
-      throw new Error("ChatGPT Zero Risk requires the Full Codex harness");
-    }
-    if (captureLunaCheckpoint || multipartEnabled) {
-      throw new Error("ChatGPT Zero Risk does not support rolling or multipart browser transport");
-    }
-  }
   if (multipartParts !== undefined && !isChatGptWebMultipartPartCount(multipartParts)) {
     throw new Error("Bigger Context requires two or six context parts");
   }
@@ -524,9 +501,7 @@ export function compileChatGptWebPrompt(
     throw new Error("Rolling checkpoints are supported only for normal ChatGPT Luna turns");
   }
   if (mode.localTools && !turnToken) {
-    throw new Error(manualControl
-      ? "ChatGPT Zero Risk requires a broker request id"
-      : "Tool-capable ChatGPT web mode requires a broker turn token");
+    throw new Error("Tool-capable ChatGPT web mode requires a broker turn token");
   }
   if (!mode.localTools && turnToken !== undefined) {
     throw new Error("A read-only ChatGPT Web effort must not receive a local-tool capability token");
@@ -544,11 +519,9 @@ export function compileChatGptWebPrompt(
     multipartEnabled
       ? "Read and reconstruct every acknowledged staged JSON record before acting."
       : "Read the complete inline JSON task context before acting.",
-    manualControl
-      ? "Each image_attachment in the context refers, in order, to an image the user manually attached to this ChatGPT message. If its corresponding image is absent, say that it was not provided instead of guessing."
-      : multipartEnabled
-        ? "Each image_attachment in the staged context refers to the correspondingly named image attached to this commit message; inspect it directly."
-        : "Each image_attachment in the context refers to the correspondingly named image attached to this ChatGPT message; inspect it directly.",
+    multipartEnabled
+      ? "Each image_attachment in the staged context refers to the correspondingly named image attached to this commit message; inspect it directly."
+      : "Each image_attachment in the context refers to the correspondingly named image attached to this ChatGPT message; inspect it directly.",
     "If a ChatGPT-native capability renders a rich card, widget, chart, or other non-text result, also provide the relevant result as ordinary Markdown in the final answer. A private ChatGPT UI widget never replaces the Markdown answer returned to Codex.",
     "Never copy a ChatGPT widget's HTML, CSS, class names, or DOM markup into the answer unless the user explicitly requested that source markup.",
     "Do not mention this transport contract, context packaging, or capability routing in the user-facing answer unless the user explicitly asks how the bridge works.",
@@ -558,16 +531,11 @@ export function compileChatGptWebPrompt(
     ] : []),
   ];
   const transportContract = parsed._compactionRequest
-    ? manualControl
-      ? [
-        "This is a Codex history-compaction checkpoint, not a normal task turn.",
-        "Do not call work tools or ChatGPT-native tools. Summarize only the supplied task context according to the final compaction instruction.",
-      ]
-      : [
+    ? [
       "This is a Codex history-compaction checkpoint, not a normal task turn.",
       "Do not call local or ChatGPT-native tools. Summarize only the supplied task context according to the final compaction instruction.",
       "Return only the checkpoint summary that the next model needs to resume the task.",
-      ]
+    ]
     : mode.localTools
     ? [
       "For local work required by the task, use the selected plugin's tools directly according to their declared descriptions and schemas.",
@@ -622,29 +590,10 @@ export function compileChatGptWebPrompt(
       "The outer bridge removes this marker and checkpoint from the user-facing stream. Never refer to the checkpoint in the visible answer.",
     ]
     : [];
-  const manualControlContract = manualControl
-    ? [
-      "<codex_zero_risk_request_json>",
-      JSON.stringify({ request_id: turnToken }),
-      "</codex_zero_risk_request_json>",
-    ]
-    : [];
   const transportResume = parsed._compactionRequest
-    ? manualControl
-      ? [
-        "<codex_transport_resume>",
-        "The task context is complete. Produce the requested checkpoint summary now.",
-        "</codex_transport_resume>",
-      ]
-      : [
+    ? [
       "<codex_transport_resume>",
       "The task context is complete. Produce the requested checkpoint summary now without calling tools.",
-      "</codex_transport_resume>",
-      ]
-    : manualControl
-    ? [
-      "<codex_transport_resume>",
-      "The task context is complete. Execute the latest active user request now.",
       "</codex_transport_resume>",
     ]
     : mode.localTools
@@ -678,7 +627,7 @@ export function compileChatGptWebPrompt(
     ] : [];
     const attachments = {
       ...(skillFiles.length ? { skillFiles } : {}),
-      ...(mode.localTools && !manualControl && !parsed._compactionRequest ? { turnToken } : {}),
+      ...(mode.localTools && !parsed._compactionRequest ? { turnToken } : {}),
       ...(options?.includeContextTokenBreakdown
         ? { contextTokenBreakdown: contextTokenBreakdown(system, messages, multipartEnabled) }
         : {}),
@@ -705,7 +654,6 @@ export function compileChatGptWebPrompt(
           ...skillContract,
           ...transportContract,
           ...outputControlContract,
-          ...manualControlContract,
           ...checkpointContract,
           answerContract,
           ...transportResume,
@@ -761,7 +709,6 @@ export function compileChatGptWebPrompt(
       ...skillContract,
       ...transportContract,
       ...outputControlContract,
-      ...manualControlContract,
       ...checkpointContract,
       answerContract,
       // Context is serialized data, not Markdown prose. A text fence keeps the
@@ -775,9 +722,7 @@ export function compileChatGptWebPrompt(
         "<codex_transport_resume>",
         `${omittedMessages} earlier history items were omitted to fit this compaction request; the supplied history is incomplete.`,
         "Preserve still-relevant progress, constraints and pending work from any supplied cumulative checkpoint and the remaining evidence. Do not infer that omitted work was never done or invent missing details.",
-        manualControl
-          ? "Produce the requested checkpoint summary now."
-          : "Produce the requested checkpoint summary now without calling tools.",
+        "Produce the requested checkpoint summary now without calling tools.",
         "</codex_transport_resume>",
       ] : transportResume),
     ].join("\n");

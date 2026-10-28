@@ -66,20 +66,6 @@ if (!build.success) {
   throw new Error(`Runtime bundle failed: ${build.logs.map(log => log.message).join("; ")}`);
 }
 
-const browserHelperBuild = await Bun.build({
-  entrypoints: [join(root, "src", "adapters", "chatgpt-web", "browser-helper-main.ts")],
-  target: "node",
-  format: "cjs",
-  minify: true,
-  external: ["playwright-core"],
-  packages: "external",
-  outdir: appDir,
-  naming: "browser-helper.cjs",
-});
-if (!browserHelperBuild.success) {
-  throw new Error(`Browser helper bundle failed: ${browserHelperBuild.logs.map(log => log.message).join("; ")}`);
-}
-
 copyFileSync(join(root, "package.json"), join(appDir, "package.json"));
 copyFileSync(join(root, "bun.lock"), join(appDir, "bun.lock"));
 const install = Bun.spawnSync([process.execPath, "install", "--production", "--frozen-lockfile", "--ignore-scripts"], {
@@ -130,7 +116,6 @@ const notices = Bun.spawnSync([
   "run",
   join(root, "scripts", "generate-third-party-notices.ts"),
   join(output, "THIRD_PARTY_NOTICES.txt"),
-  "--include-launcher",
 ], {
   cwd: root,
   stdout: "pipe",

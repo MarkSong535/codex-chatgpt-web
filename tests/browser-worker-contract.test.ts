@@ -10,7 +10,7 @@ import { chatGptUnavailableProDetail } from "../src/adapters/chatgpt-web/browser
 import { chatGptStoppedThinkingError } from "../src/adapters/chatgpt-web/adapter-error";
 import { CHATGPT_STOPPED_THINKING_LABELS } from "../src/adapters/chatgpt-web/ui-labels";
 import { CHATGPT_WEB_MODEL_ID } from "../src/adapters/chatgpt-web/model";
-import { CHATGPT_CONNECTOR_NAME, DEV_CHATGPT_CONNECTOR_NAME, defaultChromeExecutable, legacyChatGptConnectorMigrationMessage } from "../src/config";
+import { CHATGPT_CONNECTOR_NAME, defaultChromeExecutable, legacyChatGptConnectorMigrationMessage } from "../src/config";
 import { CHATGPT_SEND_BUTTON_SELECTOR, CHATGPT_THINK_BUTTON_SELECTOR, parseChatGptEffortSliderState } from "../src/chatgpt-session";
 import { ChatGptExternalTurnProgress, chatGptExternalToolCallsAreInFlight } from "../src/adapters/chatgpt-web/turn-progress";
 import type { CodexProviderConfig } from "../src/types";
@@ -273,7 +273,7 @@ test("browser turns run concurrently up to the five-tab limit", async () => {
   expect(MAX_CHATGPT_BROWSER_TABS).toBe(5);
   const releases = new Map<string, () => void>();
   const worker = Object.assign(Object.create(ChatGptBrowserWorker.prototype), {
-    config: { browserHost: "managed-chrome" },
+    config: {},
     activeRuns: new Map(),
     runExclusive: (turn: { traceId: string }) => new Promise<string>(resolve => {
       releases.set(turn.traceId, () => resolve(turn.traceId));
@@ -495,27 +495,6 @@ test("compaction retry submission evidence cannot make prompt-stage settlement u
   );
   await expect(result).rejects.toThrow("ChatGPT browser stage timed out: prompt_attachment");
   expect(evaluateStarted).toBeTrue();
-});
-
-test("launcher page acquisition proves a nonzero operational viewport before DOM interaction", () => {
-  const workerSource = readFileSync(new URL("../src/adapters/chatgpt-web/browser-worker.ts", import.meta.url), "utf8");
-  const connect = workerSource.indexOf("const connection = await connectLauncherBrowserHost(");
-  const viewport = workerSource.indexOf("await waitForOperationalChatGptViewport(connection.page, abortSignal);", connect);
-  const acquired = workerSource.indexOf('await diagnostics.capture(page, "browser-page-acquired")', viewport);
-
-  expect(connect).toBeGreaterThan(-1);
-  expect(viewport).toBeGreaterThan(connect);
-  expect(acquired).toBeGreaterThan(viewport);
-  expect(workerSource).toContain("innerWidth >= width && innerHeight >= height");
-});
-
-test("Luna turns without a retained conversation never send connector identity alone", () => {
-  const workerSource = readFileSync(new URL("../src/adapters/chatgpt-web/browser-worker.ts", import.meta.url), "utf8");
-  const runExclusive = workerSource.slice(workerSource.indexOf("  private async runExclusive("));
-  const connectorIdentity = runExclusive.indexOf("connectorIdentity: this.config.appName");
-  expect(connectorIdentity).toBeGreaterThan(-1);
-  expect(runExclusive.slice(connectorIdentity - 260, connectorIdentity)).toContain("turn.conversationKey");
-  expect(runExclusive.slice(connectorIdentity - 260, connectorIdentity)).toContain("turn.nativeConnector");
 });
 
 test("chat preparation preserves page-read and composer errors instead of reporting an expired login", async () => {
@@ -835,7 +814,7 @@ test("two-part saved chats re-prove unchanged effort after the first message cre
     await expect(worker.runBrowserTurn({
       traceId: "saved_multipart", modelId: CHATGPT_WEB_MODEL_ID, reasoning: "low", capabilities,
       prepare: async () => prepared, onTextDelta() {}, onReasoningSummary() {},
-    }, undefined, page)).rejects.toBe(finished);
+    }, page)).rejects.toBe(finished);
     expect(sends).toBe(2);
     expect(selections).toEqual(["https://chatgpt.com/", savedUrl]);
   } finally { rmSync(root, { recursive: true, force: true }); }
@@ -1097,7 +1076,7 @@ test("a failed stale-browser disconnect prevents the replacement connection", as
   expect(replacementAttempts).toBe(0);
 });
 
-test("closing the launcher page is an immediate terminal turn error", async () => {
+test("closing the browser page is an immediate terminal turn error", async () => {
   const responseDomSnapshot = (ChatGptBrowserWorker.prototype as unknown as {
     responseDomSnapshot(responseTurn: unknown): Promise<unknown>;
   }).responseDomSnapshot;
@@ -1842,19 +1821,6 @@ test("connector verification prepares an ordinary chat and clears its selection"
   } finally {
     rmSync(diagnosticsRoot, { recursive: true, force: true });
   }
-});
-
-test("production connector diagnostics distinguish an existing DEV connector", async () => {
-  const connectorMentionFailure = (ChatGptBrowserWorker.prototype as unknown as {
-    connectorMentionFailure(menuRows: unknown, attempts: number): Promise<string>;
-  }).connectorMentionFailure;
-  const message = await connectorMentionFailure.call({
-    config: { appName: CHATGPT_CONNECTOR_NAME },
-    connectorMentionRowTitles: async () => [DEV_CHATGPT_CONNECTOR_NAME],
-  }, {}, 1);
-
-  expect(message).toContain(`isolated DEV connector ${JSON.stringify(DEV_CHATGPT_CONNECTOR_NAME)}`);
-  expect(message).toContain(`separate connector named ${JSON.stringify(CHATGPT_CONNECTOR_NAME)}`);
 });
 
 test("connector catalog refresh stays fail-closed for absent, legacy, and exact menu evidence", async () => {
@@ -3993,20 +3959,6 @@ test("clearing the missing-response window preserves whether a response was ever
   expect(tracker.update(absent, 6_000)).toContain("response DOM disappeared");
 });
 
-test("the launcher helper transport carries MCP progress into the out-of-process browser worker", () => {
-  const client = readFileSync("src/adapters/chatgpt-web/launcher-helper-client.ts", "utf8");
-  const helper = readFileSync("src/adapters/chatgpt-web/browser-helper-main.ts", "utf8");
-
-  // The browser worker runs in the helper process while the Codex MCP broker runs in the daemon.
-  // If progress stops crossing that boundary the worker silently observes "never live" and cancels
-  // turns whose tool calls are still completing, so both ends of the transport are asserted here.
-  expect(client).toContain("forwardProgress");
-  expect(client).toMatch(/type: "progress", id: turn\.traceId, snapshot/);
-  expect(helper).toMatch(/message\.type === "progress"/);
-  expect(helper).toContain("ChatGptMirroredTurnProgress");
-  expect(helper).toMatch(/externalProgress: progress/);
-});
-
 test("both response loops check explicit Stopped thinking before acknowledging further MCP work", () => {
   const worker = readFileSync("src/adapters/chatgpt-web/browser-worker.ts", "utf8");
   for (const method of ["private async waitForMultipartAcknowledgement(", "private async runBrowserTurn("]) {
@@ -4125,28 +4077,6 @@ test("stale MCP progress stops suppressing DOM health without penalising long ac
     { revision: 0, lastToolBatchRevision: 0, activeToolCalls: 0 },
     1_000,
   )).toBeFalse();
-});
-
-test("the daemon prefers the browser helper that shipped beside its own entrypoint", () => {
-  const client = readFileSync("src/adapters/chatgpt-web/launcher-helper-client.ts", "utf8");
-  const helper = readFileSync("src/adapters/chatgpt-web/browser-helper-main.ts", "utf8");
-
-  // The launcher advertises the helper inside its signed application bundle while the daemon runs
-  // from a versioned runtime directory, so the two update independently. A daemon that spoke a
-  // newer protocol to an older helper had its frame routed to the run handler, which dereferenced
-  // a turn the frame never carried and destroyed the turn with an opaque TypeError.
-  expect(client).toContain("bundledHelperScript()");
-  expect(client).toMatch(/browserHelperScriptPath \?\? this\.bundledHelperScript\(\) \?\? descriptor\.helper\.script/);
-
-  // Belt and braces: negotiate the frame, and never treat an unrecognised frame as a run.
-  expect(client).toContain('this.helperFeatures.has("progress")');
-  expect(client).toContain('this.helperFeatures.has("tool-boundary-ack")');
-  expect(client).toContain('this.helperFeatures.has("completion-fence")');
-  expect(helper).toMatch(/message\.type === "run"/);
-  expect(helper).toContain("Browser helper received an unsupported message type");
-
-  // A malformed liveness hint is not authoritative evidence that the active turn failed.
-  expect(helper).toContain("discarded an invalid MCP progress frame");
 });
 
 
@@ -4428,28 +4358,6 @@ test("a future progress timestamp is not treated as liveness", () => {
     { ...base, lastProgressAt: 10_000 + CHATGPT_EXTERNAL_PROGRESS_CLOCK_SKEW_MS - 1 },
     10_000,
   )).toBeTrue();
-});
-
-test("the bundled helper is adopted only for the packaged runtime layout", () => {
-  const client = readFileSync("src/adapters/chatgpt-web/launcher-helper-client.ts", "utf8");
-
-  // Any daemon launched some other way keeps the launcher-advertised helper rather than adopting
-  // an unrelated sibling that merely shares a filename.
-  expect(client).toContain('basename(entrypoint) !== "cli.js"');
-
-  // Trace ids are derived deterministically and can repeat, so a run must not inherit revisions
-  // recorded for an earlier turn that happened to share the id.
-  const helper = readFileSync("src/adapters/chatgpt-web/browser-helper-main.ts", "utf8");
-  expect(helper).toContain("const progress = message.turn.externalProgress");
-  expect(helper).toContain("? new ChatGptMirroredTurnProgress(revision => {");
-
-  // A consumer callback must not be retried as though the page could not be read.
-  const worker = readFileSync("src/adapters/chatgpt-web/browser-worker.ts", "utf8");
-  const heartbeat = worker.indexOf("turn.onHeartbeat?.();");
-  const tryStart = worker.search(/ {7}try \{\r?\n {8}observedThisIteration = false;/);
-  expect(heartbeat).toBeGreaterThan(0);
-  expect(tryStart).toBeGreaterThan(0);
-  expect(heartbeat).toBeLessThan(tryStart);
 });
 
 test("a staged Bigger Context part gets an acknowledgement window sized to its payload", () => {

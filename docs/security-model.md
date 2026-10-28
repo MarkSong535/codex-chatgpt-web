@@ -2,8 +2,8 @@
 
 ## Trust boundaries
 
-The user trusts the local Codex app, this loopback daemon, the launcher's private Electron browser
-profile, the selected ChatGPT workspace, OpenAI's tunnel service, and the exact MCP connector they
+The user trusts the local Codex app, this loopback daemon, the host's Chrome or Chromium and the
+stored ChatGPT session, the selected ChatGPT workspace, OpenAI's tunnel service, and the exact MCP connector they
 created. Repository contents, tool output, websites, and prompt text are untrusted data.
 
 ## Full-mode capability flow
@@ -57,10 +57,31 @@ default.
 
 ### Browser session theft
 
-The launcher's persistent Electron partition can authorize ChatGPT access. It remains in the
-current OS user's private application-data directory and is never copied into a daemon prompt or
-runtime descriptor. Never sync, upload, attach, or commit it. On suspected exposure, sign out or
-revoke the ChatGPT session from the launcher.
+The stored storage state (`~/.codex-chatgpt-web/browser/storage-state.json`) can authorize ChatGPT
+access. It is written with user-only permissions, reduced to ChatGPT/OpenAI cookies and ChatGPT local
+storage, and never copied into a prompt. Never sync, upload, attach, or commit it. On suspected
+exposure, sign out of all sessions from ChatGPT's security settings and sign in again with
+`codex-chatgpt-web login`.
+
+### Virtual display
+
+On Linux, Chrome renders into a private Xvfb server started with `-nolisten tcp`, so it is not
+reachable over the network. It runs without X authorization, so another local account could
+connect to its socket and capture the screen, including the signed-in ChatGPT page. This is
+consistent with the single-user trust boundary above; do not run the daemon on a host shared with
+untrusted accounts.
+
+### Account credential handling
+
+The account password and TOTP secret are read from files, environment variables, or no-echo prompts
+and are never accepted as command-line arguments, where other users could read them from the process
+list. They are held only in memory for the sign-in attempt and never written to disk or logs. A
+secret file readable by other users produces a warning. A TOTP secret is equivalent to the second
+factor itself: storing it beside the password reduces the account to one factor on that host. Use it
+only on hosts you would trust with both, and prefer typing codes when the host is shared.
+
+The failure screenshot written during sign-in may show the account email address; it is saved
+owner-only next to the storage state and is overwritten by the next failure.
 
 ### Tunnel credential theft
 
@@ -79,11 +100,11 @@ boundary.
 A web page is not a local process. Browsers can reach a loopback port with a cross-site request,
 or with a same-origin one after DNS rebinding, and they attach `Origin` to every non-GET request.
 The daemon rejects any non-GET request that carries `Origin` before it reaches a route; Codex and
-the launcher never send that header. This closes the browser path only and is not authentication.
+the CLI never send that header. This closes the browser path only and is not authentication.
 
 The lifecycle endpoints are separate from the Responses surface. `/admin/drain`, `/admin/resume`,
 `/admin/cancel-turn`, `/admin/cancel-turns`, and `/admin/shutdown` require a random bearer token stored in the
-user-only application config. The launcher uses them to reject new work, prove that both the HTTP
+user-only application config. Setup and the service commands use them to reject new work, prove that both the HTTP
 request and long-lived browser/tool loop are idle, flush response state, and stop a process. The
 token does not turn loopback into a hostile-local-process security boundary; it prevents accidental
 or unauthenticated lifecycle control through ordinary requests.
@@ -96,19 +117,17 @@ turn; it never chooses another model, starts another transport, or returns a fab
 
 ### Login-state isolation
 
-The launcher keeps ChatGPT login, identity-provider navigation, and model turns in one private
-Electron partition. Allowed login popups are adopted into an in-launcher `WebContentsView` that
-shares that partition; unrelated external links remain outside it. A visible composer alone is not
-authentication evidence: the launcher also requires a valid server session and an ordinary new-chat
-URL before setup can continue. No cookies, local storage, or browser profile are copied from an
-external browser.
+Sign-in runs in a fresh browser context that shares nothing with any other browser profile on the
+host. A visible composer alone is not authentication evidence: sign-in also requires ChatGPT's
+session endpoint to report a user and an ordinary new-chat URL before the session is saved. An
+imported storage state is reduced and verified the same way before it is trusted. Human-verification
+challenges are never solved automatically.
 
 ### Cross-turn data leakage
 
-Browser turns use at most five independent task-bound tabs in one private login partition. Every
-outer Codex task owns an exact launcher surface lease and retains its ChatGPT conversation only across
-sequential messages in the same model/effort/compaction epoch; chats are never reused across tasks.
-Closing a running tab destroys its page and terminates that turn. The five-tab limit bounds parallel
+Browser turns use at most five independent task-bound tabs in one browser context. Every
+turn opens its own tab and a new ChatGPT chat and closes the tab when it settles; chats are never
+reused across turns or tasks. The five-tab limit bounds parallel
 account traffic. Tool calls remain in the same ChatGPT response. The
 bounded local continuation cache is private, expires, and exists only to implement Codex
 `previous_response_id` replay. Full-mode context compaction accepts a checkpoint only through its
@@ -125,11 +144,11 @@ Connector verification and account inspection also use ordinary chats.
 - Responses and health listeners bind to `127.0.0.1` only.
 - Full mode uses OpenAI's outbound HTTPS Secure MCP Tunnel; it opens no public listener or inbound
   firewall rule.
-- The embedded browser connects to ChatGPT, the selected identity provider during explicit sign-in,
-  and user-authorized attachment URLs through normal browser networking.
+- Chrome connects to ChatGPT, OpenAI's sign-in pages during explicit sign-in, and
+  user-authorized attachment URLs through normal browser networking.
 
 ## Non-goals
 
-- Defending against a compromised local OS user or compromised Codex/Electron binary.
+- Defending against a compromised local OS user or compromised Codex/Chrome binary.
 - Bypassing ChatGPT plan, workspace, usage, action-control, or model restrictions.
 - Making consumer browser automation equivalent to a supported OpenAI API contract.

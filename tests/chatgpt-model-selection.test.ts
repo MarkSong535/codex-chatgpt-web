@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
 import { chatGptModelFamilyMatches, selectChatGptModelFamily } from "../src/adapters/chatgpt-web/model-selection";
-import { chatGptUsageModelFromAnnouncements } from "../src/adapters/chatgpt-web/limits";
 
 test("model selection recognizes Latest in the launcher languages without accepting other model names", async () => {
   for (const [label, accepted] of [
@@ -70,14 +69,12 @@ test("repeated picker version verifies GPT-5.6 Pro without accepting conflicting
   for (const header of ["5.6 Sol 5.6 Pro", "GPT-5.6 Sol GPT-5.6 Pro"]) {
     const evidence = ["5.6 Pro, 5 of 5.", header];
     expect(chatGptModelFamilyMatches(evidence, "5.6", "max")).toBeTrue();
-    expect(chatGptUsageModelFromAnnouncements(evidence)).toBe("gpt-5.6-pro");
     expect(chatGptModelFamilyMatches(evidence, "5.6", "high")).toBeFalse();
     expect(chatGptModelFamilyMatches(evidence, "6", "max")).toBeFalse();
   }
   for (const header of ["5.6 Sol 6 Pro", "5.6 Sol 5.7 Pro", "5.6 Sol 5.6.1 Pro"]) {
     expect(chatGptModelFamilyMatches(["5.6 Pro, 5 of 5.", header], "5.6", "max")).toBeFalse();
     expect(chatGptModelFamilyMatches([header], "5.6", "high")).toBeFalse();
-    expect(chatGptUsageModelFromAnnouncements([header])).toBe("pro-unknown");
   }
   expect(chatGptModelFamilyMatches(["6 Astra 6 Pro"], "6", "max")).toBeTrue();
   expect(chatGptModelFamilyMatches(["6 Astra 6 Pro"], "6", "high")).toBeFalse();

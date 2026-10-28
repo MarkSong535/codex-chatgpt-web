@@ -1,24 +1,19 @@
 #!/usr/bin/env bun
+import { spawn } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 import { Writable } from "node:stream";
-import { timingSafeEqual } from "node:crypto";
-import { existsSync, rmSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
+import { resolve } from "node:path";
 import { stdin, stdout } from "node:process";
 import {
-  captureSystemBrowserLoginToFile,
-  checkBrowserEngine,
-  exportBrowserLogin,
-  importBrowserLogin,
-  loginToChatGpt,
-} from "./browser-login";
+  loginWithAccount,
+  type AccountLoginInput,
+  type AccountLoginProgress,
+  type VerificationCodeKind,
+} from "./account-login";
+import { checkBrowserEngine, importBrowserLogin } from "./browser-login";
 import { parseChromeGpuMode } from "./chrome-launch";
-import { defaultConfig, getConfigDir, getConfigPath, loadConfig, loadConfigForSetup } from "./config";
-import {
-  inspectLauncherBrowserHost,
-  inspectLauncherBrowserHostLiveness,
-  readLauncherBrowserHostDescriptor,
-} from "./launcher-browser-host";
+import { getConfigDir, getConfigPath, loadConfig, loadConfigForSetup } from "./config";
 import {
   activateCodexIntegration,
   deactivateCodexIntegration,
@@ -34,53 +29,53 @@ import { startServer } from "./server";
 import { assertServiceIdle, cancelActiveTurns, getServiceStatus, installService, interruptActiveTurn, restartService, startService, stopService, uninstallService } from "./service";
 import { existingFullSetupCredentials, preflightSetup, setup, type SetupOptions } from "./setup";
 import { installRuntimeKeyBytes, managedRuntimeKeyPath, stopTunnel, tunnelStatus, waitForTunnelReady } from "./tunnel";
-import { getTunnelServiceStatus, restartTunnelService, startTunnelService, stopTunnelService, uninstallTunnelService } from "./tunnel-service";
+import { systemdLingerEnabled } from "./systemd-user";
+import {
+  getTunnelServiceStatus,
+  restartTunnelService,
+  startTunnelService,
+  stopTunnelService,
+  tunnelForegroundCommand,
+  uninstallTunnelService,
+} from "./tunnel-service";
 import { VERSION } from "./version";
-import { runDevCommand } from "./dev-chat/cli";
 
 const HELP = `codex-chatgpt-web ${VERSION}
 
-Focused ChatGPT web-backed models for the native Codex harness.
+Focused ChatGPT web-backed models for the native Codex harness, driven by Chrome (on Linux on a
+private Xvfb display, so no monitor is needed).
 
 Usage:
   codex-chatgpt-web setup --browser-only [options]
   codex-chatgpt-web setup --full --tunnel-id ID --runtime-key-file PATH [options]
-  codex-chatgpt-web login [--import-login PATH]
-  codex-chatgpt-web login --export-storage-state PATH [--chrome PATH]
+  codex-chatgpt-web login [--email EMAIL] [--password-file PATH] [--totp-secret-file PATH]
+  codex-chatgpt-web login --import-login PATH
   codex-chatgpt-web doctor [--json]
   codex-chatgpt-web route <status|connect|disconnect>
   codex-chatgpt-web subagents <status|compatibility-v1|native>
   codex-chatgpt-web browser check
-  codex-chatgpt-web dev launcher
-  codex-chatgpt-web dev status [--json]
-  codex-chatgpt-web dev setup <--browser-only|--full> [options]
-  codex-chatgpt-web dev chat NAME [--model MODEL] [MESSAGE]
-  codex-chatgpt-web dev list
   codex-chatgpt-web serve
   codex-chatgpt-web mcp [--broker-socket PATH]
   codex-chatgpt-web service <status|install|start|restart|stop|cancel-turns>
-  codex-chatgpt-web tunnel <status|start|restart|stop|key-import>
+  codex-chatgpt-web tunnel <status|start|restart|stop|run|key-import>
   codex-chatgpt-web open <tunnels|runtime-keys|connectors>
   codex-chatgpt-web uninstall --yes
+
+Sign-in (setup and login):
+  --email EMAIL                ChatGPT account email (or CODEX_CHATGPT_WEB_EMAIL; prompted if unset)
+  --password-file PATH         File holding the password (or CODEX_CHATGPT_WEB_PASSWORD; prompted
+                               without echo if unset). Passwords are never accepted as arguments.
+  --totp-secret-file PATH      Authenticator secret or otpauth:// URI (or CODEX_CHATGPT_WEB_TOTP_SECRET)
+                               to fill authenticator codes automatically; otherwise you are asked
+                               for each code (authenticator, email, or SMS)
+  --import-login PATH          Use a saved Playwright storage state instead of signing in
 
 Setup options:
   --browser-only               Account-eligible Web models, full context/images, no local tools or tunnel
   --full                       Account-eligible Web models with tools through the configured connector
-  --automatic-browser-interaction
-                               Send prompts and read ChatGPT state through browser automation (default)
-  --zero-risk-browser-interaction
-                               Full mode: select, paste, and send in the launcher yourself
-  --zero-risk-pro              Zero Risk: also install the explicit Pro-sized model row
-  --zero-risk-default          Zero Risk: install only the default model row
   --port NUMBER                Loopback Responses port (default: 17841)
-  --chrome PATH                Google Chrome/Chromium executable used for account login
-  --headless                   Run managed Chrome without a window (Chrome's new headless mode)
-  --headed                     Run managed Chrome with a window; on Linux without a display it
-                               uses a private Xvfb server when installed (default)
+  --chrome PATH                Google Chrome/Chromium executable
   --chrome-gpu MODE            auto (default), hardware, or software (SwiftShader, no GPU needed)
-  --import-login PATH          Use a ChatGPT login exported with login --export-storage-state
-  --browser-host-descriptor PATH
-                               Use the embedded launcher browser described by this owner-only file
   --refresh-account-capabilities
                                Re-read the authenticated account's available Web models
   --tunnel-id ID               Existing OpenAI tunnel id (full mode)
@@ -88,7 +83,7 @@ Setup options:
   --replace-codex-route        Reversibly replace existing Responses or Voice route settings
   --subagent-protocol MODE     compatibility-v1 (default) or native (advanced)
   --restart-service            Explicitly restart this project's daemon after an update
-  --login                      Refresh the stored ChatGPT login even if one exists
+  --login                      Sign in again even if a stored ChatGPT login exists
   --auto-approve-tool-calls    Opt in to per-call browser clicks on "Allow once" prompts
   --bigger-context             Enable experimental adaptive 1/2/6-message context
   --fresh-conversation         Start each automatic turn in a fresh browser chat
@@ -156,144 +151,79 @@ function assertNoArgs(args: string[]): void {
   if (args.length > 0) throw new Error(`Unknown arguments: ${args.join(" ")}`);
 }
 
-function authorizeLauncherControl(operation: string): void {
-  const descriptorPath = process.env.CODEX_CHATGPT_WEB_BROWSER_HOST_DESCRIPTOR?.trim();
-  const supplied = process.env.CODEX_WEB_GPT_LAUNCHER_CONTROL_TOKEN?.trim();
-  delete process.env.CODEX_WEB_GPT_LAUNCHER_CONTROL_TOKEN;
-  if (!descriptorPath || !supplied) {
-    throw new Error(`Launcher-controlled ${operation} requires a live launcher authorization`);
+function readSecretFile(path: string, label: string): string {
+  const absolute = resolve(path);
+  if (process.platform !== "win32" && (statSync(absolute).mode & 0o077) !== 0) {
+    process.stderr.write(`Warning: ${absolute} is readable by other users; restrict it with chmod 600.\n`);
   }
-  const descriptor = readLauncherBrowserHostDescriptor(descriptorPath);
-  const expectedBytes = Buffer.from(descriptor.control.token);
-  const suppliedBytes = Buffer.from(supplied);
-  if (expectedBytes.length !== suppliedBytes.length || !timingSafeEqual(expectedBytes, suppliedBytes)) {
-    throw new Error(`Launcher-controlled ${operation} authorization is invalid`);
-  }
+  const value = readFileSync(absolute, "utf8").replace(/\r?\n$/, "");
+  if (!value) throw new Error(`The ${label} file is empty: ${absolute}`);
+  return value;
 }
 
-function launcherLoginContinuation(): { promise: Promise<void>; close: () => void } {
-  const maxBytes = 1_024;
-  let buffered = "";
-  let bytes = 0;
-  let settled = false;
-  let resolveContinuation!: () => void;
-  let rejectContinuation!: (error: Error) => void;
-  const promise = new Promise<void>((resolve, reject) => {
-    resolveContinuation = resolve;
-    rejectContinuation = reject;
-  });
-  const cleanup = () => {
-    stdin.off("data", onData);
-    stdin.off("end", onEnd);
-    stdin.pause();
-  };
-  const fail = (message: string) => {
-    if (settled) return;
-    settled = true;
-    cleanup();
-    rejectContinuation(new Error(message));
-  };
-  const onData = (chunk: Buffer | string) => {
-    if (settled) return;
-    const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    bytes += data.length;
-    if (bytes > maxBytes) {
-      fail("Launcher passkey control message is too large");
-      return;
+function codeKindLabel(kind: VerificationCodeKind): string {
+  return kind === "authenticator" ? "authenticator app"
+    : kind === "email" ? "email"
+      : kind === "sms" ? "text message"
+        : "verification";
+}
+
+function printLoginProgress(event: AccountLoginProgress): void {
+  stdout.write(`[${event.step}/${event.total}] ${event.title}${event.detail ? `: ${event.detail}` : ""}\n`);
+}
+
+/** Reads sign-in flags now; credentials are gathered only if a sign-in is actually needed. */
+function takeAccountLoginOptions(args: string[]): () => Promise<AccountLoginInput> {
+  const emailOption = takeOption(args, "--email");
+  const passwordFile = takeOption(args, "--password-file");
+  const totpSecretFile = takeOption(args, "--totp-secret-file");
+  if (takeOption(args, "--password") !== undefined) {
+    throw new Error("Passwords are not accepted as arguments; use --password-file, CODEX_CHATGPT_WEB_PASSWORD, or the prompt");
+  }
+  return async () => {
+    const interactive = Boolean(stdin.isTTY && stdout.isTTY);
+    const email = emailOption?.trim()
+      || process.env.CODEX_CHATGPT_WEB_EMAIL?.trim()
+      || await prompt("ChatGPT account email: ");
+    if (!email) throw new Error("A ChatGPT account email is required: pass --email or set CODEX_CHATGPT_WEB_EMAIL");
+    const password = passwordFile
+      ? readSecretFile(passwordFile, "password")
+      : process.env.CODEX_CHATGPT_WEB_PASSWORD || await secretPrompt("ChatGPT password (hidden): ");
+    if (!password) {
+      throw new Error("A ChatGPT password is required: use --password-file, CODEX_CHATGPT_WEB_PASSWORD, or run in a terminal");
     }
-    buffered += data.toString("utf8");
-    const newline = buffered.indexOf("\n");
-    if (newline < 0) return;
-    const line = buffered.slice(0, newline);
-    if (buffered.slice(newline + 1).trim()) {
-      fail("Launcher passkey control sent unexpected trailing data");
-      return;
-    }
-    let message: unknown;
-    try {
-      message = JSON.parse(line);
-    } catch {
-      fail("Launcher passkey control sent invalid JSON");
-      return;
-    }
-    if (!message || typeof message !== "object"
-      || (message as { version?: unknown }).version !== 1
-      || (message as { type?: unknown }).type !== "passkey-login-continue") {
-      fail("Launcher passkey control sent an invalid continuation message");
-      return;
-    }
-    settled = true;
-    cleanup();
-    resolveContinuation();
-  };
-  const onEnd = () => fail("Launcher closed the passkey control channel before Continue");
-  stdin.on("data", onData);
-  stdin.once("end", onEnd);
-  stdin.resume();
-  return {
-    promise,
-    close: () => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-    },
+    const totpSecret = totpSecretFile
+      ? readSecretFile(totpSecretFile, "TOTP secret")
+      : process.env.CODEX_CHATGPT_WEB_TOTP_SECRET?.trim() || undefined;
+    return {
+      email,
+      password,
+      ...(totpSecret ? { totpSecret } : {}),
+      ...(interactive ? {
+        requestCode: async ({ kind, attempt }) => {
+          const label = codeKindLabel(kind);
+          const where = kind === "email" ? "check your inbox for the code OpenAI just sent"
+            : kind === "sms" ? "check your phone for the code OpenAI just sent"
+              : "open your authenticator app";
+          if (attempt === 1) stdout.write(`      Two-factor verification: ${where}.\n`);
+          return await prompt(`      Enter the ${label} code${attempt > 1 ? " (previous code was rejected)" : ""}: `);
+        },
+      } : {}),
+      progress: printLoginProgress,
+    };
   };
 }
 
 async function loginCommand(args: string[]): Promise<void> {
-  const launcherControl = takeFlag(args, "--launcher-control");
-  if (!launcherControl) {
-    const exportPath = takeOption(args, "--export-storage-state");
-    if (exportPath) {
-      const chrome = takeOption(args, "--chrome");
-      assertNoArgs(args);
-      const config = existsSync(getConfigPath()) ? loadConfig() : defaultConfig();
-      if (chrome) config.chromeExecutablePath = resolve(chrome);
-      const result = await exportBrowserLogin(config, resolve(exportPath));
-      stdout.write(
-        `ChatGPT login exported to ${result.storageStatePath}. It grants access to your ChatGPT account; `
-        + "copy it only to a trusted host, import it with --import-login, then delete it.\n",
-      );
-      return;
-    }
-    const importPath = takeOption(args, "--import-login");
-    assertNoArgs(args);
-    const config = loadConfig();
-    if (config.browserHost === "launcher") {
-      throw new Error("ChatGPT login is owned by the launcher; open Codex Web GPT and use its Sign in step");
-    }
-    const result = importPath
-      ? await importBrowserLogin(config, resolve(importPath))
-      : await loginToChatGpt(config);
-    stdout.write(`ChatGPT login stored at ${result.storageStatePath}\n`);
-    return;
-  }
-
-  const chromeExecutablePath = takeOption(args, "--chrome");
-  const storageStatePath = takeOption(args, "--storage-state");
+  const importPath = takeOption(args, "--import-login");
+  const accountLogin = takeAccountLoginOptions(args);
   assertNoArgs(args);
-  authorizeLauncherControl("passkey login");
-  if (process.platform !== "darwin") throw new Error("Passkey sign-in is currently supported only on macOS");
-  if (!chromeExecutablePath || !isAbsolute(chromeExecutablePath)) {
-    throw new Error("Launcher passkey sign-in requires --chrome with an absolute path");
-  }
-  if (!storageStatePath || !isAbsolute(storageStatePath)) {
-    throw new Error("Launcher passkey sign-in requires --storage-state with an absolute path");
-  }
-  const continuation = launcherLoginContinuation();
-  try {
-    await captureSystemBrowserLoginToFile({
-      ...defaultConfig(),
-      chromeExecutablePath,
-      storageStatePath,
-    }, {
-      continuation: continuation.promise,
-      onBrowserReady: () => { stdout.write(`${JSON.stringify({ version: 1, type: "passkey-login-ready" })}\n`); },
-    });
-  } finally {
-    continuation.close();
-  }
-  stdout.write("Passkey session captured for Launcher verification.\n");
+  const config = loadConfig();
+  const result = importPath
+    ? await importBrowserLogin(config, resolve(importPath))
+    : await loginWithAccount(config, await accountLogin());
+  stdout.write(`ChatGPT login stored at ${result.storageStatePath}\n`);
+  if (getServiceStatus().loaded) stdout.write("Restart the daemon to use it: codex-chatgpt-web service restart\n");
 }
 
 async function setupCommand(args: string[]): Promise<void> {
@@ -307,16 +237,6 @@ async function setupCommand(args: string[]): Promise<void> {
     mode: full ? "full" : "browser-only",
     ...(portRaw ? { port: Number(portRaw) } : {}),
   };
-  const automaticBrowserInteraction = takeFlag(args, "--automatic-browser-interaction");
-  const manualBrowserInteraction = takeFlag(args, "--zero-risk-browser-interaction");
-  if (automaticBrowserInteraction && manualBrowserInteraction) {
-    throw new Error(
-      "Choose at most one browser interaction mode: --automatic-browser-interaction or --zero-risk-browser-interaction",
-    );
-  }
-  if (automaticBrowserInteraction || manualBrowserInteraction) {
-    options.browserInteractionMode = manualBrowserInteraction ? "manual" : "automatic";
-  }
   const connectorNameSuffix = takeOption(args, "--connector-name-suffix");
   if (connectorNameSuffix !== undefined) options.connectorNameSuffix = connectorNameSuffix;
   const subagentProtocol = takeOption(args, "--subagent-protocol");
@@ -329,17 +249,12 @@ async function setupCommand(args: string[]): Promise<void> {
   const tunnelId = takeOption(args, "--tunnel-id");
   const runtimeKeyFile = takeOption(args, "--runtime-key-file");
   const chrome = takeOption(args, "--chrome");
-  const browserHostDescriptorPath = takeOption(args, "--browser-host-descriptor");
-  if (chrome) options.chromeExecutablePath = chrome;
-  if (browserHostDescriptorPath) options.browserHostDescriptorPath = browserHostDescriptorPath;
-  const headless = takeFlag(args, "--headless");
-  const headed = takeFlag(args, "--headed");
-  if (headless && headed) throw new Error("Choose at most one of --headless or --headed");
-  if (headless || headed) options.headed = headed;
+  if (chrome) options.chromeExecutablePath = resolve(chrome);
   const chromeGpu = takeOption(args, "--chrome-gpu");
   if (chromeGpu !== undefined) options.chromeGpu = parseChromeGpuMode(chromeGpu, "--chrome-gpu");
   const importLogin = takeOption(args, "--import-login");
   if (importLogin) options.importLoginPath = resolve(importLogin);
+  options.accountLogin = takeAccountLoginOptions(args);
   options.refreshAccountCapabilities = takeFlag(args, "--refresh-account-capabilities");
   if (tunnelId) options.tunnelId = tunnelId;
   if (runtimeKeyFile) options.runtimeKeyFile = runtimeKeyFile;
@@ -365,12 +280,6 @@ async function setupCommand(args: string[]): Promise<void> {
   }
   if (biggerContext || standardContext) options.experimentalBiggerContext = biggerContext;
   if (skillAttachments || inlineSkills) options.experimentalSkillAttachments = skillAttachments;
-  const zeroRiskPro = takeFlag(args, "--zero-risk-pro");
-  const zeroRiskDefault = takeFlag(args, "--zero-risk-default");
-  if (zeroRiskPro && zeroRiskDefault) {
-    throw new Error("Choose at most one Zero Risk model profile: --zero-risk-pro or --zero-risk-default");
-  }
-  if (zeroRiskPro || zeroRiskDefault) options.zeroRiskProEnabled = zeroRiskPro;
   options.replaceCodexRoute = takeFlag(args, "--replace-codex-route");
   options.preserveDisconnectedRoute = takeFlag(args, "--preserve-disconnected-route");
   options.restartService = takeFlag(args, "--restart-service");
@@ -393,12 +302,11 @@ async function setupCommand(args: string[]): Promise<void> {
   }
 
   const existing = existsSync(getConfigPath()) ? loadConfigForSetup() : undefined;
-  const interactionMode = options.browserInteractionMode ?? existing?.browserInteractionMode ?? "automatic";
-  const reusableCredentials = existingFullSetupCredentials(existing, interactionMode);
+  const reusableCredentials = existingFullSetupCredentials(existing);
   const needsTunnelId = !options.tunnelId && !reusableCredentials.tunnelId;
   const needsRuntimeKey = !options.runtimeKeyFile
     && !reusableCredentials.runtimeKey
-    && !existsSync(managedRuntimeKeyPath(interactionMode));
+    && !existsSync(managedRuntimeKeyPath());
 
   if (full && (needsTunnelId || needsRuntimeKey) && stdin.isTTY) {
     stdout.write("Full mode needs an OpenAI tunnel and a runtime key with Tunnels Read + Use.\n");
@@ -413,6 +321,15 @@ async function setupCommand(args: string[]): Promise<void> {
   const result = await setup(options);
   stdout.write(`Setup complete: ${result.mode}\n`);
   stdout.write(`Config: ${result.configPath}\n`);
+  if (!result.serviceSupported) {
+    stdout.write("No service manager (launchd or systemd --user) is available, so nothing runs in the background.\n");
+    stdout.write("Keep these running yourself, for example under your container's process supervisor:\n");
+    stdout.write("  codex-chatgpt-web serve\n");
+    if (result.mode === "full") stdout.write("  codex-chatgpt-web tunnel run\n");
+  } else if (process.platform === "linux" && !systemdLingerEnabled()) {
+    stdout.write("systemd stops user services when you log out. To keep them running, enable lingering once:\n");
+    stdout.write("  sudo loginctl enable-linger \"$USER\"\n");
+  }
   if (result.connectorSetupRequired) {
     stdout.write("One account-level step remains: attach the tunnel to the ChatGPT connector named in config.\n");
     stdout.write("Open: https://chatgpt.com/#settings/Plugins\n");
@@ -460,9 +377,6 @@ async function subagentsCommand(args: string[]): Promise<void> {
   const action = args.shift() ?? "status";
   assertNoArgs(args);
   const config = loadConfig();
-  if (config.purpose === "dev-harness") {
-    throw new Error("The isolated DEV harness has no Codex subagent protocol to configure");
-  }
   if (action === "status") {
     const integration = inspectCodexIntegration();
     stdout.write(`${JSON.stringify({
@@ -479,7 +393,6 @@ async function subagentsCommand(args: string[]): Promise<void> {
   stdout.write(`${JSON.stringify({
     protocol: journal.installed.subagent_protocol,
     codexRestartRequired: true,
-    launcherRestartRequired: true,
   }, null, 2)}\n`);
 }
 
@@ -538,6 +451,22 @@ async function tunnelCommand(args: string[]): Promise<void> {
     return;
   }
   const config = loadConfig();
+  if (action === "run") {
+    // Foreground runtime for hosts without a service manager; exits with the tunnel client.
+    const [command, ...commandArgs] = tunnelForegroundCommand(config);
+    const child = spawn(command!, commandArgs, {
+      stdio: "inherit",
+      env: { ...process.env, CODEX_CHATGPT_WEB_HOME: getConfigDir(), MCP_STDIO_SEND_INITIALIZED_NOTIFICATION: "true" },
+    });
+    const forward = (signal: NodeJS.Signals) => { child.kill(signal); };
+    process.once("SIGINT", forward);
+    process.once("SIGTERM", forward);
+    process.exitCode = await new Promise<number>((resolveExit, rejectExit) => {
+      child.once("error", rejectExit);
+      child.once("exit", (code, signal) => resolveExit(signal ? 1 : code ?? 1));
+    });
+    return;
+  }
   if (action === "start") startTunnelService();
   else if (action === "restart") {
     await assertServiceIdle(config);
@@ -578,28 +507,21 @@ async function openCommand(args: string[]): Promise<void> {
 async function uninstallCommand(args: string[]): Promise<void> {
   const yes = takeFlag(args, "--yes");
   const keepData = takeFlag(args, "--keep-data");
-  const launcherControl = takeFlag(args, "--launcher-control");
   assertNoArgs(args);
-  if (launcherControl) authorizeLauncherControl("uninstall");
   if (!yes && !await confirm("Restore Codex config, stop services, and remove this installation?")) {
     throw new Error("Uninstall cancelled");
   }
   const config = existsSync(getConfigPath()) ? loadConfig() : undefined;
-  if (config?.browserHost === "launcher" && !launcherControl) {
-    throw new Error(
-      "Launcher-owned integration must be removed from Codex Web GPT Settings so the active runtime can be drained safely.",
-    );
-  }
-  if (!config && process.platform === "darwin" && getServiceStatus().installed) {
+  const service = getServiceStatus();
+  if (!config && service.installed) {
     throw new Error("Service exists but configuration is missing; refusing an unverifiable uninstall");
   }
-  const launcherRuntimeStopped = config?.browserHost === "launcher" && launcherControl;
-  if (config && process.platform === "darwin" && !launcherRuntimeStopped) await assertServiceIdle(config);
-  if (config?.mode === "full" && !launcherRuntimeStopped) {
-    if (process.platform === "darwin") await uninstallTunnelService();
+  if (config && service.supported) await assertServiceIdle(config);
+  if (config?.mode === "full") {
+    if (getTunnelServiceStatus().supported) await uninstallTunnelService();
     stopTunnel(config);
   }
-  if (config && process.platform === "darwin" && !launcherRuntimeStopped) await uninstallService(config);
+  if (config && service.supported) await uninstallService(config);
   uninstallCodexIntegration();
   if (!keepData) rmSync(getConfigDir(), { recursive: true, force: true });
   stdout.write(keepData ? "Uninstalled; private application data was preserved.\n" : "Uninstalled and removed private application data.\n");
@@ -618,9 +540,6 @@ async function main(): Promise<void> {
     return;
   }
   const command = args.shift() ?? "help";
-  if (command === "dev" && home) {
-    throw new Error("--home does not apply to DEV mode; use CODEX_WEB_GPT_DEV_HOME for an explicit isolated DEV profile");
-  }
   if (command === "help") stdout.write(HELP);
   else if (command === "setup") await setupCommand(args);
   else if (command === "login") await loginCommand(args);
@@ -632,26 +551,15 @@ async function main(): Promise<void> {
     assertNoArgs(args);
     if (action !== "check") throw new Error("Browser command must be: browser check");
     const config = loadConfig();
-    if (config.browserHost === "launcher") {
-      if (config.browserInteractionMode === "manual") {
-        await inspectLauncherBrowserHostLiveness(config.browserHostDescriptorPath!);
-        stdout.write("The launcher browser is reachable; ChatGPT DOM inspection is intentionally disabled in Zero Risk.\n");
-      } else {
-        await inspectLauncherBrowserHost(config.browserHostDescriptorPath!);
-        stdout.write("Playwright can reach the authenticated ChatGPT surface embedded in the launcher.\n");
-      }
-    } else {
-      await checkBrowserEngine(config);
-      stdout.write("Playwright can launch the configured Chrome executable.\n");
-    }
+    await checkBrowserEngine(config);
+    stdout.write("Playwright can launch the configured Chrome executable.\n");
   } else if (command === "serve") {
     assertNoArgs(args);
     const config = loadConfig();
     const server = startServer(config);
     stdout.write(`codex-chatgpt-web ${VERSION} listening on http://${config.host}:${server.port}/v1 (${config.mode})\n`);
     await new Promise<void>(() => {});
-  } else if (command === "dev") await runDevCommand(args);
-  else if (command === "mcp") await runChatGptMcpMain(args);
+  } else if (command === "mcp") await runChatGptMcpMain(args);
   else if (command === "service") await serviceCommand(args);
   else if (command === "hook") {
     const action = args.shift();

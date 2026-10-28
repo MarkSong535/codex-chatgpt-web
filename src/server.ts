@@ -39,7 +39,6 @@ import {
   type ChatGptWebModelRoute,
 } from "./chatgpt-web-models";
 import { forwardNativeCodexRequest, type NativeFetch, type NativeImageEndpoint } from "./native-passthrough";
-import { fetchNativeCodex } from "./native-network";
 import {
   buildCompactV1Output,
   COMPACT_PROMPT,
@@ -367,14 +366,10 @@ export interface ResponseRequestOptions {
 
 export function routeChatGptWebRequest(parsed: CodexParsedRequest, config: AppConfig): ChatGptWebModelRoute {
   const route = requireChatGptWebModelRoute(parsed.modelId, config, parsed.options.reasoning);
-  if (route.interactionMode === "automatic" && route.modelFamily) parsed._chatgptModelFamily = route.modelFamily;
+  if (route.modelFamily) parsed._chatgptModelFamily = route.modelFamily;
   else delete parsed._chatgptModelFamily;
   parsed.modelId = route.backendModel;
-  // Zero Risk preserves a distinct backend identity. Its immutable Codex effort is only a
-  // protocol/catalog value; the manual adapter must never reinterpret it as a ChatGPT selection.
-  parsed.options.reasoning = route.interactionMode === "automatic"
-    ? route.adapterEffort
-    : route.codexEffort;
+  parsed.options.reasoning = route.adapterEffort;
   return route;
 }
 
@@ -528,7 +523,7 @@ export async function modelsRequest(
   let sent = false;
   const forward = (request: Request, markSent: () => void) => forwardNativeCodexRequest(request, "models", input => {
     markSent();
-    return (fetchUpstream ?? fetchNativeCodex)(input);
+    return (fetchUpstream ?? fetch)(input);
   });
   try {
     if (shared) {
@@ -970,9 +965,6 @@ export function startServer(
     modelCatalogFetches?: ModelCatalogFetches;
   } = {},
 ): ReturnType<typeof Bun.serve> {
-  if (config.purpose === "dev-harness") {
-    throw new Error("DEV harness configuration cannot start a Responses listener");
-  }
   const startedAt = Date.now();
   const turnBroker = config.mode === "full" ? TurnBroker.forSocket(config.brokerSocketPath) : undefined;
   if (config.mode === "full") {

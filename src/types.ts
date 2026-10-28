@@ -266,14 +266,6 @@ export interface CodexProviderConfig {
   chatgptWeb?: {
     /** ChatGPT custom connector attached to tool-capable chats. */
     appName?: string;
-    /** Whether ChatGPT DOM interaction is automatic or explicitly driven by the user. */
-    browserInteractionMode?: "automatic" | "manual";
-    /** Explicit browser owner. Launcher mode attaches to the embedded Electron ChatGPT surface. */
-    browserHost?: "managed-chrome" | "launcher";
-    /** Owner-only descriptor containing the launcher's loopback CDP and control endpoints. */
-    browserHostDescriptorPath?: string;
-    /** Explicit browser-helper bundle. DEV builds current source; the launcher still supplies Electron-as-Node. */
-    browserHelperScriptPath?: string;
     /** Explicit private diagnostic root for isolated harnesses. */
     browserDiagnosticsPath?: string;
     /** Playwright storage-state file created by the explicit browser login. */
@@ -295,8 +287,6 @@ export interface CodexProviderConfig {
      * genuinely unresponsive upstream for longer. Defaults to DEFAULT_STALL_TIMEOUT_SEC.
      */
     stallTimeoutSec?: number;
-    /** Keep the single controlled browser visible. */
-    headed?: boolean;
     /** Managed Chrome GPU backend: auto, hardware, or SwiftShader software rendering. */
     chromeGpu?: "auto" | "hardware" | "software";
     /** Attach the turn-bound Codex MCP capability for every connector-capable Web model. */

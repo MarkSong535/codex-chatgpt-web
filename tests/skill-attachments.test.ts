@@ -89,16 +89,13 @@ test("skill content counts toward input and final-message budgets, including mul
   }
 });
 
-test("over-limit, malformed and manual requests fail explicitly without silently losing skill content", () => {
+test("over-limit and malformed requests fail explicitly without silently losing skill content", () => {
   const ten = Array.from({ length: 10 }, (_, i) => input(text(`skill-${i}`)));
   expect(chatGptPromptFilePayloads(compile(ten))).toHaveLength(10);
   expect(() => chatGptPromptFilePayloads(compile([...ten, input(text("eleventh"))]))).toThrow("10 attachments");
   const image = { role: "user", content: [{ type: "input_image", image_url: "data:image/png;base64,iVBORw==" }] };
   expect(() => chatGptPromptFilePayloads(compile([...ten, image]))).toThrow("10 attachments");
   expect(() => compile([input("Not a skill envelope")])).toThrow("invalid Codex envelope");
-  expect(() => compileChatGptWebPrompt(parse([input(text())]), capabilities, token, {
-    experimentalSkillAttachments: true, manualControl: true,
-  })).toThrow("Zero Risk");
 });
 
 

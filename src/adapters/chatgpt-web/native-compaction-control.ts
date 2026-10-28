@@ -43,26 +43,6 @@ export function activeCompactionToolResultInstruction(): string {
   ].join("\n");
 }
 
-/**
- * Zero Risk cannot submit a second browser message automatically. When Codex compacts at an
- * already-visible native tool boundary, the same manually submitted response returns the
- * checkpoint through the same Zero Risk request instead.
- */
-export function zeroRiskActiveCompactionToolResultInstruction(toolExecuted: boolean): string {
-  return [
-    `<${CODEX_ACTIVE_COMPACTION_REQUEST_MARKER}>`,
-    toolExecuted
-      ? "Codex reached its context limit while this Web response was waiting for the tool result above."
-      : "Codex reached its context limit before the requested tool could be sent for execution. The tool was not executed.",
-    toolExecuted
-      ? "Consume that canonical result, stop ordinary task work now, and do not call any more work tools."
-      : "Stop ordinary task work now and do not call any more work tools.",
-    COMPACT_PROMPT,
-    "Call no more work tools. Return only the complete checkpoint summary to Codex with codex_turn_complete.",
-    `</${CODEX_ACTIVE_COMPACTION_REQUEST_MARKER}>`,
-  ].join("\n");
-}
-
 export function structuredCompactionHandoffInstruction(
   transaction: CompactionTransactionHandle,
   appName: string,

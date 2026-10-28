@@ -1,17 +1,9 @@
 import { cpSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { defaultBrokerEndpoint } from "../src/config";
 import { VERSION } from "../src/version";
-
-const require = createRequire(import.meta.url);
-const { validateRuntimeBundle } = require("../launcher/electron/runtime-install.cjs") as {
-  validateRuntimeBundle: (
-    runtimeRoot: string,
-    identity: { version: string; platform: string; arch: string },
-  ) => string;
-};
+import { validateRuntimeBundle } from "./runtime-bundle";
 
 const sourceBundle = resolve(process.argv[2] ?? "dist/runtime");
 const sourceRoot = resolve(import.meta.dir, "..");

@@ -63,9 +63,8 @@ test("the prediction response also reaches Codex through the normal SSE completi
   expect(JSON.parse(result.output[0].content[0].text)).toEqual({ suggestion: "Show me the diff." });
 });
 
-test("disabled, Free, and manual-mode predictions stop before constructing an adapter", async () => {
-  for (const change of [{ composerPredictionsEnabled: false }, { solAvailable: false, proAvailable: false },
-    { browserInteractionMode: "manual" as const }]) {
+test("disabled and Free predictions stop before constructing an adapter", async () => {
+  for (const change of [{ composerPredictionsEnabled: false }, { solAvailable: false, proAvailable: false }]) {
     const result = await send(base, { ...defaultConfig("full"), ...change });
     expect(result.response.status).toBe(400);
     expect(result.constructions).toBe(0);

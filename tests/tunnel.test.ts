@@ -22,12 +22,9 @@ test("native connect completes shared MCP initialization without changing the pa
     const appConfig = config.defaultConfig("full");
     appConfig.tunnel = createTunnelConfig({ binaryPath: process.execPath,
       runtimeKeyFile: join(root, "key"), tunnelId: `tunnel_${"a".repeat(32)}` });
-    for (const mode of ["automatic", "manual"] as const) {
-      appConfig.browserInteractionMode = mode;
-      connectTunnel(appConfig);
-      expect(process.env.MCP_STDIO_SEND_INITIALIZED_NOTIFICATION).toBe("false");
-    }
-    expect(command).toHaveBeenCalledTimes(2);
+    connectTunnel(appConfig);
+    expect(process.env.MCP_STDIO_SEND_INITIALIZED_NOTIFICATION).toBe("false");
+    expect(command).toHaveBeenCalledTimes(1);
   } finally {
     command.mockRestore();
     home.mockRestore();

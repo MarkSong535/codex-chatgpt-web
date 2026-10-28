@@ -5,7 +5,6 @@ import {
   decodeCompactionSummary,
 } from "./responses/compaction";
 import { BRIDGE_REASONING_PREFIX } from "./responses/reasoning-envelope";
-import { fetchNativeCodex } from "./native-network";
 
 const CODEX_BACKEND = "https://chatgpt.com/backend-api/codex";
 const FIRST_PARTY_CODEX_ORIGINATORS = new Set([
@@ -208,7 +207,7 @@ function withUncleanCloseTolerance(
 export async function forwardNativeCodexRequest(
   request: Request,
   endpoint: NativeCodexEndpoint,
-  fetchUpstream: NativeFetch = fetchNativeCodex,
+  fetchUpstream: NativeFetch = request => fetch(request),
   decodedBody?: unknown,
 ): Promise<Response> {
   const authorization = request.headers.get("authorization") ?? "";

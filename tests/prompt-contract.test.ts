@@ -380,13 +380,6 @@ test("inline compaction carries the newest cumulative checkpoint across discarde
     expect(compiled.text).not.toContain("The task context is complete.");
     expect(chatGptPromptJsonBytes(compiled.text)).toBeLessThanOrEqual(CHATGPT_COMPACTION_PROMPT_JSON_BYTE_BUDGET);
     expect(compact).toEqual(before);
-    const manual = compileChatGptWebPrompt(compact, {
-      localToolsEnabled: true, solAvailable: true, extraHighAvailable: true, proAvailable: true,
-    }, "turn_12345678901234567890123456789012", { manualControl: true });
-    expect(manual.text).toContain("Verified cumulative scope:");
-    expect(manual.text).toContain("history is incomplete");
-    expect(manual.text).not.toContain("without calling tools");
-    expect(chatGptPromptJsonBytes(manual.text)).toBeLessThanOrEqual(CHATGPT_COMPACTION_PROMPT_JSON_BYTE_BUDGET);
   }
 });
 

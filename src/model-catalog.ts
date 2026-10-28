@@ -103,7 +103,7 @@ export function buildChatGptWebModel(
   if (!templateSlug || templateSlug.startsWith(CHATGPT_WEB_MODEL_PREFIX)) {
     throw new Error("ChatGPT Web model template must be a native Codex model");
   }
-  const modelFamily = route.interactionMode === "automatic" ? route.modelFamily : undefined;
+  const modelFamily = route.modelFamily;
   const limits = resolveChatGptWebContextLimits(route.backendModel, route.adapterEffort, config, modelFamily);
   const efforts = chatGptWebRouteEfforts(route, config);
   for (const effort of efforts) {
@@ -121,7 +121,7 @@ export function buildChatGptWebModel(
     slug: route.slug,
     display_name: route.displayName,
     description: route.description,
-    input_modalities: route.interactionMode === "manual" ? ["text"] : ["text", "image"],
+    input_modalities: ["text", "image"],
     visibility: route.legacy ? "hide" : "list",
     // These slugs are implemented by this local Responses-compatible bridge. Marking them false
     // makes Codex drop them from spawn_agent whenever openai_base_url points at the bridge.

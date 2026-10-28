@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
 import {
   CHROME_SOFTWARE_GPU_ARGS,
+  chromeLaunchOptions,
   chromeLaunchPlan,
   parseChromeGpuMode,
-  playwrightLaunchOptions,
   resolveChromeGpuMode,
   type ChromeHostFacts,
 } from "../src/chrome-launch";
@@ -13,16 +13,16 @@ function facts(overrides: Partial<ChromeHostFacts> = {}): ChromeHostFacts {
   return { platform: "linux", env: {}, isRoot: false, hasRenderNode: false, ...overrides };
 }
 
-const quiet = { warn: () => {} };
+const xvfb = (display = ":42") => async () => display;
+const noXvfb = async () => undefined;
 
-test("auto GPU uses SwiftShader only on Linux hosts without a display or render node", () => {
+test("auto GPU uses SwiftShader on a virtual display or a Linux host without a render node", () => {
   expect(resolveChromeGpuMode("auto", facts())).toBe("software");
-  expect(resolveChromeGpuMode("auto", facts({ env: { DISPLAY: ":0" } }))).toBe("software");
-  expect(resolveChromeGpuMode("auto", facts({ hasRenderNode: true }))).toBe("software");
-  expect(resolveChromeGpuMode("auto", facts({ env: { DISPLAY: ":0" }, hasRenderNode: true }))).toBe("hardware");
+  expect(resolveChromeGpuMode("auto", facts({ hasRenderNode: true }))).toBe("hardware");
+  expect(resolveChromeGpuMode("auto", facts({ hasRenderNode: true }), true)).toBe("software");
   expect(resolveChromeGpuMode(undefined, facts({ platform: "darwin" }))).toBe("hardware");
   expect(resolveChromeGpuMode("software", facts({ platform: "win32" }))).toBe("software");
-  expect(resolveChromeGpuMode("hardware", facts())).toBe("hardware");
+  expect(resolveChromeGpuMode("hardware", facts(), true)).toBe("hardware");
 });
 
 test("the GPU environment override wins and is validated", () => {
@@ -33,71 +33,54 @@ test("the GPU environment override wins and is validated", () => {
   expect(() => parseChromeGpuMode("swiftshader", "--chrome-gpu")).toThrow("--chrome-gpu must be one of auto, hardware, software");
 });
 
-test("headed Chrome on a display-less Linux host runs on a private virtual display", async () => {
-  const plan = await chromeLaunchPlan({ headed: true }, {
-    ...quiet,
-    facts: facts({ env: { PATH: "/usr/bin" } }),
-    startVirtualDisplay: async () => ":42",
+test("Linux Chrome runs on a private Xvfb display with SwiftShader and container-safe arguments", async () => {
+  const plan = await chromeLaunchPlan(undefined, {
+    facts: facts({ env: { PATH: "/usr/bin", DISPLAY: ":0" }, hasRenderNode: true }),
+    startVirtualDisplay: xvfb(),
   });
-  expect(plan.headless).toBe(false);
-  expect(plan.virtualDisplay).toBe(":42");
-  expect(plan.env).toEqual({ PATH: "/usr/bin", DISPLAY: ":42" });
-  expect(plan.gpu).toBe("software");
-  expect(plan.args).toEqual([...CHROME_SOFTWARE_GPU_ARGS, "--disable-dev-shm-usage"]);
+  expect(plan).toEqual({
+    gpu: "software",
+    args: [...CHROME_SOFTWARE_GPU_ARGS, "--disable-dev-shm-usage"],
+    virtualDisplay: ":42",
+    env: { PATH: "/usr/bin", DISPLAY: ":42" },
+  });
 });
 
-test("without Xvfb a headed request falls back to headless with software GPU", async () => {
-  const warnings: string[] = [];
-  const plan = await chromeLaunchPlan({ headed: true }, {
-    facts: facts(),
-    startVirtualDisplay: async () => undefined,
-    warn: message => warnings.push(message),
-  });
-  expect(plan.headless).toBe(true);
-  expect(plan.env).toBeUndefined();
-  expect(plan.args).toContain("--use-angle=swiftshader");
-  expect(warnings).toHaveLength(1);
-});
-
-test("Xvfb can be disabled and headless can be forced from the environment", async () => {
+test("without Xvfb Linux uses an existing display, and fails clearly when there is none", async () => {
+  const desktop = await chromeLaunchPlan("hardware", { facts: facts({ env: { DISPLAY: ":0" } }), startVirtualDisplay: noXvfb });
+  expect(desktop).toEqual({ gpu: "hardware", args: ["--disable-dev-shm-usage"] });
+  await expect(chromeLaunchPlan(undefined, { facts: facts(), startVirtualDisplay: noXvfb }))
+    .rejects.toThrow("Install Xvfb");
   let started = false;
-  const startVirtualDisplay = async () => { started = true; return ":1"; };
-  const disabled = await chromeLaunchPlan({ headed: true }, {
-    ...quiet, facts: facts({ env: { CODEX_CHATGPT_WEB_XVFB: "0" } }), startVirtualDisplay,
-  });
-  expect(disabled.headless).toBe(true);
-  const forced = await chromeLaunchPlan({ headed: true }, {
-    ...quiet, facts: facts({ env: { CODEX_CHATGPT_WEB_HEADLESS: "1", DISPLAY: ":0" } }), startVirtualDisplay,
-  });
-  expect(forced.headless).toBe(true);
-  expect(started).toBe(false);
+  await expect(chromeLaunchPlan(undefined, {
+    facts: facts({ env: { CODEX_CHATGPT_WEB_XVFB: "0" } }),
+    startVirtualDisplay: async () => { started = true; return ":1"; },
+  })).rejects.toThrow("Install Xvfb");
+  expect(started).toBeFalse();
 });
 
 test("root on Linux disables the sandbox and extra arguments are appended", async () => {
-  const plan = await chromeLaunchPlan({ headed: false, gpu: "hardware" }, {
-    ...quiet,
+  const plan = await chromeLaunchPlan("hardware", {
     facts: facts({ isRoot: true, env: { CODEX_CHATGPT_WEB_CHROME_ARGS: " --lang=en-US  --window-size=1280,900 " } }),
+    startVirtualDisplay: xvfb(":7"),
   });
   expect(plan.args).toEqual(["--disable-dev-shm-usage", "--no-sandbox", "--lang=en-US", "--window-size=1280,900"]);
 });
 
-test("macOS and Windows keep Chrome's own defaults", async () => {
+test("macOS and Windows open an ordinary Chrome window with Chrome's own defaults", async () => {
   for (const platform of ["darwin", "win32"] as const) {
-    const plan = await chromeLaunchPlan({ headed: true }, { ...quiet, facts: facts({ platform, isRoot: true }) });
-    expect(plan).toEqual({ headless: false, args: [], gpu: "hardware" });
+    expect(await chromeLaunchPlan(undefined, { facts: facts({ platform, isRoot: true }), startVirtualDisplay: xvfb() }))
+      .toEqual({ gpu: "hardware", args: [] });
   }
 });
 
-test("Playwright options carry the plan's display and caller arguments", () => {
-  const options = playwrightLaunchOptions(
-    { headless: false, args: ["--a"], env: { DISPLAY: ":3" }, gpu: "software", virtualDisplay: ":3" },
-    "/usr/bin/google-chrome",
-    ["--b"],
-  );
-  expect(options).toEqual({
-    executablePath: "/usr/bin/google-chrome",
+test("Playwright options never use headless mode and keep caller arguments last", async () => {
+  expect(await chromeLaunchOptions("/usr/bin/chromium", "auto", ["--no-first-run"], {
+    facts: facts(), startVirtualDisplay: xvfb(":3"),
+  })).toEqual({
+    executablePath: "/usr/bin/chromium",
     headless: false,
-    args: ["--a", "--b"],
+    args: [...CHROME_SOFTWARE_GPU_ARGS, "--disable-dev-shm-usage", "--no-first-run"],
     env: { DISPLAY: ":3" },
   });
 });

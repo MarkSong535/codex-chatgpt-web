@@ -147,9 +147,6 @@ describe("tunnel launchd ownership", () => {
       "--broker-socket",
       "\\\\.\\pipe\\codex-chatgpt-web-test",
     ]);
-
-    config.browserInteractionMode = "manual";
-    expect(parsePinnedTunnelCommand(mcpCommand(config, "win32"))).toContain("safe");
   });
 
 });

@@ -3,7 +3,6 @@ import { expect, test } from "bun:test";
 import { chromium } from "playwright-core";
 import { ChatGptBrowserWorker } from "../src/adapters/chatgpt-web/browser-worker";
 import { CHATGPT_WEB_MODEL_ID } from "../src/adapters/chatgpt-web/model";
-import { readChatGptUsageModel } from "../src/adapters/chatgpt-web/limits";
 
 // Mirrors ChatGPT's power picker as captured live on 2026-09-29 (English, Pro account): the slider
 // announcement reads only "Pro, 5 of 5." and the model version appears in the "Select model"
@@ -113,36 +112,6 @@ test.skipIf(!process.env.CHATGPT_DOM_TEST_BROWSER)("GPT-6 Pro fails closed when 
   expect(result.ok).toBe(false);
   expect(result.message).toContain("ChatGPT model 6 could not be selected and verified");
   expect(result.draft).toBe("Draft");
-}, 60_000);
-
-test.skipIf(!process.env.CHATGPT_DOM_TEST_BROWSER)("model evidence excludes inactive and foreign picker headers and rejects multiple active headers", async () => {
-  const browser = await chromium.launch({ executablePath: process.env.CHATGPT_DOM_TEST_BROWSER, headless: true });
-  try {
-    const page = await browser.newPage();
-    await page.setContent(`<div role="menu" id="owned">
-      <div data-model-picker-view-toggle="true" id="active"><div data-menu-row-content>
-        <span>6</span><span>Pro</span><span hidden>5.6</span>
-      </div></div>
-      <div role="menuitem" aria-describedby="status"><span role="slider"></span></div>
-      <span id="status">Pro, 5 of 5.</span>
-      <div hidden><div data-model-picker-view-toggle="true">5.6 Pro</div></div>
-      <div inert><div data-model-picker-view-toggle="true">5.6 Pro</div></div>
-      <div aria-hidden="true"><div data-model-picker-view-toggle="true">5.6 Pro</div></div>
-      <div style="display:none"><div data-model-picker-view-toggle="true">5.6 Pro</div></div>
-      <div role="menu"><div data-model-picker-view-toggle="true">5.6 Pro</div></div>
-    </div><div role="menu"><div data-model-picker-view-toggle="true">5.6 Pro</div></div>`);
-    const slider = page.getByRole("slider");
-    expect(await readChatGptUsageModel(slider, true)).toBe("gpt-6-pro");
-    await page.locator("#active").evaluate(element => element.setAttribute("hidden", ""));
-    expect(await readChatGptUsageModel(slider, true)).toBe("pro-unknown");
-    await page.locator("#active").evaluate(element => {
-      element.removeAttribute("hidden");
-      element.after(element.cloneNode(true));
-    });
-    await expect(readChatGptUsageModel(slider, true)).rejects.toThrow("multiple active model headers");
-  } finally {
-    await browser.close();
-  }
 }, 60_000);
 
 test.skipIf(!process.env.CHATGPT_DOM_TEST_BROWSER)("localized position punctuation works through actual picker selection and usage readback", async () => {

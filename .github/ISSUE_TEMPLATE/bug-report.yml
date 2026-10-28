@@ -8,13 +8,13 @@ body:
     attributes:
       value: |
         Please read [Troubleshooting](https://github.com/miuuyy/codex-chatgpt-web/blob/main/TROUBLESHOOTING.md), update to the latest release, and reproduce the failure once before filing.
-        Never upload cookies, browser storage, API keys, Tunnel IDs, raw launcher logs, or unredacted Codex prompts/tool output.
+        Never upload cookies, browser storage, passwords, TOTP secrets, API keys, Tunnel IDs, raw logs, or unredacted Codex prompts/tool output.
 
   - type: input
-    id: launcher-version
+    id: version
     attributes:
       label: Codex Web GPT version
-      description: Use the version shown by the launcher or release installer, not "latest".
+      description: Use the output of `codex-chatgpt-web --version`, not "latest".
       placeholder: x.y.z
     validations:
       required: true
@@ -69,7 +69,6 @@ body:
       options:
         - Browser-only
         - Full harness (MCP)
-        - Zero Risk (manual browser submission)
         - Setup / sign-in (no model turn yet)
     validations:
       required: true
@@ -78,7 +77,7 @@ body:
     id: model
     attributes:
       label: Selected model
-      description: Use the exact Codex model-picker name. For Zero Risk, also include the model and effort selected in ChatGPT. Write "not applicable" for setup failures.
+      description: Use the exact Codex model-picker name. Write "not applicable" for setup failures.
       placeholder: ChatGPT Web — High
     validations:
       required: true
@@ -95,7 +94,7 @@ body:
     id: reproduction
     attributes:
       label: Minimal reproduction
-      description: Number the smallest reliable sequence starting from a fresh Codex task or launcher state.
+      description: Number the smallest reliable sequence starting from a fresh Codex task.
       placeholder: |
         1. …
         2. …
@@ -116,7 +115,7 @@ body:
     id: diagnostics
     attributes:
       label: Privacy-safe diagnostics
-      description: Reproduce once, then attach the file from Activity → Export safe log. If export itself fails, explain that here.
+      description: Reproduce once, then paste the relevant lines from ~/.codex-chatgpt-web/logs/daemon.stderr.log (or `journalctl --user -u codex-chatgpt-web`) with private data removed. For sign-in failures, include the last `[n/7]` step shown.
     validations:
       required: true
 

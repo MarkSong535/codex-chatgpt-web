@@ -3,9 +3,12 @@ import { existsSync, readdirSync } from "node:fs";
 import type { LaunchOptions } from "playwright-core";
 
 /**
+ * Chrome always runs as an ordinary (non-headless) browser: ChatGPT's bot protection rejects
+ * headless Chrome. On Linux it renders into a private Xvfb display, so no monitor is needed.
+ *
  * `hardware` leaves GPU selection to Chrome. `software` forces WebGL/compositing through ANGLE's
- * SwiftShader backend, which needs no GPU device. `auto` picks software on Linux hosts without a
- * graphical session or a DRM render node (servers, containers, CI, VMs without virtio-gpu).
+ * SwiftShader backend, which needs no GPU device. `auto` picks software on a virtual display and on
+ * Linux hosts without a DRM render node (servers, containers, CI, VMs without virtio-gpu).
  */
 export type ChromeGpuMode = "auto" | "hardware" | "software";
 
@@ -60,107 +63,77 @@ export function hasGraphicalDisplay(facts: Pick<ChromeHostFacts, "platform" | "e
   return Boolean(facts.env.DISPLAY?.trim() || facts.env.WAYLAND_DISPLAY?.trim());
 }
 
-function envFlag(env: NodeJS.ProcessEnv, name: string): boolean | undefined {
-  const value = env[name]?.trim().toLowerCase();
-  if (!value) return undefined;
-  if (["1", "true", "yes", "on"].includes(value)) return true;
-  if (["0", "false", "no", "off"].includes(value)) return false;
-  throw new Error(`${name} must be 1 or 0`);
-}
-
 export function resolveChromeGpuMode(
   configured: ChromeGpuMode | undefined,
   facts: ChromeHostFacts,
+  virtualDisplay = false,
 ): "hardware" | "software" {
   const override = facts.env.CODEX_CHATGPT_WEB_CHROME_GPU?.trim();
   const mode = override ? parseChromeGpuMode(override, "CODEX_CHATGPT_WEB_CHROME_GPU") : configured ?? "auto";
   if (mode !== "auto") return mode;
   if (facts.platform !== "linux") return "hardware";
-  return hasGraphicalDisplay(facts) && facts.hasRenderNode ? "hardware" : "software";
+  return virtualDisplay || !facts.hasRenderNode ? "software" : "hardware";
 }
 
 export interface ChromeLaunchPlan {
-  headless: boolean;
   args: string[];
-  /** Present only when the plan changes the inherited environment (a virtual DISPLAY). */
-  env?: NodeJS.ProcessEnv;
   gpu: "hardware" | "software";
+  /** Present only when Chrome runs on a private Xvfb display. */
   virtualDisplay?: string;
-}
-
-export interface ChromeLaunchRequest {
-  /** Whether the caller wants a real (non-headless) browser window. */
-  headed: boolean;
-  gpu?: ChromeGpuMode;
+  env?: NodeJS.ProcessEnv;
 }
 
 export interface ChromeLaunchDependencies {
   facts?: ChromeHostFacts;
   startVirtualDisplay?: () => Promise<string | undefined>;
-  warn?: (message: string) => void;
 }
 
-/**
- * Resolves how Chrome should start on this host. A headed request on a Linux host without a
- * display runs on a private Xvfb server when one is installed, which keeps the ordinary headed
- * Chrome fingerprint; otherwise it falls back to Chrome's new headless mode.
- */
 export async function chromeLaunchPlan(
-  request: ChromeLaunchRequest,
+  gpu: ChromeGpuMode | undefined,
   dependencies: ChromeLaunchDependencies = {},
 ): Promise<ChromeLaunchPlan> {
   const facts = dependencies.facts ?? currentChromeHostFacts();
-  const warn = dependencies.warn ?? (message => console.warn(`[chrome] ${message}`));
-  let headless = !request.headed;
-  if (envFlag(facts.env, "CODEX_CHATGPT_WEB_HEADLESS") === true) headless = true;
-
-  let env: NodeJS.ProcessEnv | undefined;
   let virtualDisplay: string | undefined;
-  if (!headless && !hasGraphicalDisplay(facts)) {
-    if (envFlag(facts.env, "CODEX_CHATGPT_WEB_XVFB") !== false) {
+  if (facts.platform === "linux") {
+    // A private display keeps Chrome's windows off any desktop session the user may have.
+    if (facts.env.CODEX_CHATGPT_WEB_XVFB?.trim() !== "0") {
       virtualDisplay = await (dependencies.startVirtualDisplay ?? ensureVirtualDisplay)();
     }
-    if (virtualDisplay) {
-      env = { ...facts.env, DISPLAY: virtualDisplay };
-    } else {
-      warn("No X11/Wayland display and no Xvfb; starting Chrome in headless mode");
-      headless = true;
+    if (!virtualDisplay && !hasGraphicalDisplay(facts)) {
+      throw new Error(
+        "Chrome needs a display, and this Linux host has none. Install Xvfb (for example "
+        + "`sudo apt install xvfb`) so Chrome can run on a private virtual display.",
+      );
     }
   }
-  const effectiveFacts = env ? { ...facts, env } : facts;
-  const gpu = resolveChromeGpuMode(request.gpu, effectiveFacts);
-
+  const resolved = resolveChromeGpuMode(gpu, facts, virtualDisplay !== undefined);
   const args: string[] = [];
-  if (gpu === "software") args.push(...CHROME_SOFTWARE_GPU_ARGS);
+  if (resolved === "software") args.push(...CHROME_SOFTWARE_GPU_ARGS);
   if (facts.platform === "linux") {
     // Containers commonly mount a 64 MB /dev/shm, which crashes renderers on large pages.
     args.push("--disable-dev-shm-usage");
     // Chrome refuses to start as root with its sandbox enabled.
     if (facts.isRoot) args.push("--no-sandbox");
   }
-  args.push(...extraChromeArgs(facts.env));
+  args.push(...(facts.env.CODEX_CHATGPT_WEB_CHROME_ARGS ?? "").split(/\s+/).filter(Boolean));
   return {
-    headless,
     args,
-    ...(env ? { env } : {}),
-    gpu,
-    ...(virtualDisplay ? { virtualDisplay } : {}),
+    gpu: resolved,
+    ...(virtualDisplay ? { virtualDisplay, env: { ...facts.env, DISPLAY: virtualDisplay } } : {}),
   };
 }
 
-function extraChromeArgs(env: NodeJS.ProcessEnv): string[] {
-  return (env.CODEX_CHATGPT_WEB_CHROME_ARGS ?? "").split(/\s+/).filter(Boolean);
-}
-
-/** Playwright launch options for a plan. Callers append their own `args` after these. */
-export function playwrightLaunchOptions(
-  plan: ChromeLaunchPlan,
+/** Playwright launch options for this host. Callers append their own `args`. */
+export async function chromeLaunchOptions(
   executablePath: string,
+  gpu: ChromeGpuMode | undefined,
   extraArgs: string[] = [],
-): LaunchOptions {
+  dependencies?: ChromeLaunchDependencies,
+): Promise<LaunchOptions> {
+  const plan = await chromeLaunchPlan(gpu, dependencies);
   return {
     executablePath,
-    headless: plan.headless,
+    headless: false,
     args: [...plan.args, ...extraArgs],
     ...(plan.env ? { env: plan.env as LaunchOptions["env"] } : {}),
   };
@@ -168,16 +141,16 @@ export function playwrightLaunchOptions(
 
 let virtualDisplayStart: Promise<string | undefined> | undefined;
 
-function xvfbExecutable(): string | undefined {
+export function xvfbExecutable(): string | undefined {
   const lookup = spawnSync("sh", ["-c", "command -v Xvfb"], { encoding: "utf8" });
   const path = lookup.status === 0 ? lookup.stdout.trim() : "";
   return path && existsSync(path) ? path : undefined;
 }
 
 /**
- * Starts one private Xvfb server and returns its DISPLAY. Xvfb picks a free display number itself
- * (-displayfd) and exits when its last client disconnects (-terminate), so a closed browser never
- * leaves a server behind; the next launch starts a fresh one.
+ * Starts one private Xvfb server for this process and returns its DISPLAY. Xvfb picks a free display
+ * number itself (-displayfd) and serves every later launch; it is stopped when this process exits,
+ * and systemd stops it with the rest of the service's process group.
  */
 export function ensureVirtualDisplay(): Promise<string | undefined> {
   virtualDisplayStart ??= startVirtualDisplay().catch(error => {
@@ -196,7 +169,7 @@ async function startVirtualDisplay(): Promise<string | undefined> {
     "-displayfd", "3",
     "-screen", "0", VIRTUAL_DISPLAY_SCREEN,
     "-nolisten", "tcp",
-    "-terminate",
+    "-noreset",
   ], { stdio: ["ignore", "ignore", "ignore", "pipe"] });
   const displayPipe = child.stdio[3] as NodeJS.ReadableStream & { destroy(): void };
   const display = await new Promise<string>((resolve, reject) => {
@@ -216,9 +189,9 @@ async function startVirtualDisplay(): Promise<string | undefined> {
       clearTimeout(timer);
       reject(error);
     });
-    child.once("exit", (code, signal) => {
+    child.once("exit", code => {
       clearTimeout(timer);
-      reject(new Error(`Xvfb exited before reporting a display (${signal ?? code})`));
+      reject(new Error(`Xvfb exited before reporting a display (${code})`));
     });
   });
   displayPipe.destroy();

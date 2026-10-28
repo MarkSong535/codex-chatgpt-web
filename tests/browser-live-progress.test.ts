@@ -7,33 +7,6 @@ import { ChatGptBrowserObservationTimeoutError, ChatGptBrowserWorker, ChatGptCom
 import { chatGptAssistantTurnSelector, chatGptTurnContainerSelector } from "../src/chatgpt-session";
 import { ChatGptExternalTurnProgress } from "../src/adapters/chatgpt-web/turn-progress";
 
-test("the largest response diagnostics survive the launcher's safe-log string limit intact", () => {
-  const { sanitizeForExport } = require("../launcher/electron/logging.cjs");
-  const structures = Array.from({ length: 3 }, () => ({
-    truncated: true,
-    nodes: Array.from({ length: 200 }, (_, index) => ({
-      parent: index - 1, tag: "section", rendered: true, assistant: true, user: false,
-      searchUnit: true, markdown: true, streamingStatus: true, activityStart: true, completionControl: true,
-      alert: true, retryControl: true,
-    })),
-  }));
-  const entries = chatGptResponseStructureLogEntries("a".repeat(128), "99-turn-failed", structures);
-  expect(entries).toHaveLength(3);
-  const prefix = "[chatgpt-web] response_structure ";
-  for (let index = 0; index < entries.length; index++) {
-    const exported = sanitizeForExport(entries[index]);
-    expect(exported).not.toContain("[truncated]");
-    const payload = JSON.parse(exported.slice(prefix.length));
-    expect(payload.turnCount).toBe(3);
-    expect(payload.turnIndex).toBe(index);
-    expect(payload.turns[0].nodes).toHaveLength(200);
-    expect(payload.turns[0].nodes[199][0]).toBe(198);
-  }
-  const empty = chatGptResponseStructureLogEntries("empty-trace", "99-turn-failed", []);
-  expect(empty).toHaveLength(1);
-  expect(JSON.parse(empty[0]!.slice(prefix.length)).turns).toEqual([]);
-});
-
 test("a browser security challenge is scoped to the owned submission and never retried automatically", async () => {
   const frame = {};
   const page = Object.assign(new EventEmitter(), { mainFrame: () => frame, isClosed: () => false });
@@ -121,9 +94,6 @@ test.skipIf(!process.env.CHATGPT_DOM_TEST_BROWSER)("picker diagnostics distingui
     const stalled = await page.evaluate(chatGptInteractionState, { selector: "button", sampleFrames: true });
     expect(stalled.frames!.count).toBe(0);
     expect(stalled.frames!.elapsedMs).toBeGreaterThanOrEqual(450);
-    const { sanitizeForExport } = require("../launcher/electron/logging.cjs");
-    const serialized = JSON.stringify({ ...stalled, controls: Array(10).fill(stalled.controls[0]) });
-    expect(sanitizeForExport(serialized)).toBe(serialized);
   } finally { await browser.close(); }
 });
 

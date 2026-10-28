@@ -4,8 +4,18 @@ import { dirname, join } from "node:path";
 import type { AppConfig } from "./config";
 import { assertDurableRuntimeCommand, atomicWriteFile, getConfigDir } from "./config";
 import { runCommand, runChecked } from "./process";
+import {
+  installSystemdUnit,
+  restartSystemdUnit,
+  startSystemdUnit,
+  stopSystemdUnit,
+  systemdUnitFile,
+  systemdUnitStatus,
+  uninstallSystemdUnit,
+} from "./systemd-user";
 
 const LABEL = "io.github.codex-chatgpt-web.daemon";
+const SYSTEMD_UNIT = "codex-chatgpt-web.service";
 
 export interface ServiceStatus {
   supported: boolean;
@@ -91,16 +101,34 @@ ${args.map(arg => `    <string>${xml(arg)}</string>`).join("\n")}
 `;
 }
 
-function assertMacOs(): void {
-  if (process.platform !== "darwin") {
-    throw new Error(
-      "Terminal-managed background services require macOS. "
-      + "Use the Codex Web GPT launcher on Windows or Linux.",
-    );
+function systemdUnit(config: AppConfig): string {
+  const logDir = join(getConfigDir(), "logs");
+  return systemdUnitFile({
+    description: "codex-chatgpt-web Responses daemon",
+    execStart: [...config.runtimeCommand, "serve"],
+    environment: { CODEX_CHATGPT_WEB_HOME: getConfigDir() },
+    stdoutPath: join(logDir, "daemon.stdout.log"),
+    stderrPath: join(logDir, "daemon.stderr.log"),
+  });
+}
+
+function assertSupported(): void {
+  if (process.platform !== "darwin" && process.platform !== "linux") {
+    throw new Error("Background services are supported on macOS (launchd) and Linux (systemd --user)");
   }
 }
 
 export function getServiceStatus(): ServiceStatus {
+  if (process.platform === "linux") {
+    const status = systemdUnitStatus(SYSTEMD_UNIT);
+    return {
+      supported: status.supported,
+      installed: status.installed,
+      loaded: status.active,
+      label: SYSTEMD_UNIT,
+      definitionPath: status.path,
+    };
+  }
   if (process.platform !== "darwin") return { supported: false, installed: false, loaded: false, label: LABEL };
   const path = plistPath();
   const result = runCommand("launchctl", ["print", serviceTarget()]);
@@ -114,8 +142,12 @@ export function getServiceStatus(): ServiceStatus {
 }
 
 export function installService(config: AppConfig): ServiceStatus {
-  assertMacOs();
+  assertSupported();
   assertDurableRuntimeCommand(config.runtimeCommand);
+  if (process.platform === "linux") {
+    installSystemdUnit(SYSTEMD_UNIT, systemdUnit(config), join(getConfigDir(), "logs"));
+    return getServiceStatus();
+  }
   const path = plistPath();
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   mkdirSync(join(getConfigDir(), "logs"), { recursive: true, mode: 0o700 });
@@ -127,7 +159,11 @@ export function installService(config: AppConfig): ServiceStatus {
 }
 
 export function startService(): ServiceStatus {
-  assertMacOs();
+  assertSupported();
+  if (process.platform === "linux") {
+    startSystemdUnit(SYSTEMD_UNIT);
+    return getServiceStatus();
+  }
   const path = plistPath();
   if (!existsSync(path)) throw new Error(`Service is not installed: ${path}`);
   const status = getServiceStatus();
@@ -265,13 +301,17 @@ export async function assertServiceIdle(config: AppConfig): Promise<void> {
 }
 
 export async function restartService(config: AppConfig): Promise<ServiceStatus> {
-  assertMacOs();
+  assertSupported();
   if (!getServiceStatus().loaded) return startService();
   const lease = await acquireDrain(config);
   try {
-    runChecked("launchctl", ["bootout", serviceTarget()]);
-    await waitForServiceUnloaded();
-    await bootstrapService(plistPath());
+    if (process.platform === "linux") {
+      restartSystemdUnit(SYSTEMD_UNIT);
+    } else {
+      runChecked("launchctl", ["bootout", serviceTarget()]);
+      await waitForServiceUnloaded();
+      await bootstrapService(plistPath());
+    }
   } catch (error) {
     return releaseDrainAfterFailure(lease, error);
   }
@@ -289,12 +329,16 @@ export function removeLegacyRuntimeArtifacts(config: AppConfig): void {
 }
 
 export async function stopService(config: AppConfig): Promise<ServiceStatus> {
-  assertMacOs();
+  assertSupported();
   if (getServiceStatus().loaded) {
     const lease = await acquireDrain(config);
     try {
-      runChecked("launchctl", ["bootout", serviceTarget()]);
-      await waitForServiceUnloaded();
+      if (process.platform === "linux") {
+        stopSystemdUnit(SYSTEMD_UNIT);
+      } else {
+        runChecked("launchctl", ["bootout", serviceTarget()]);
+        await waitForServiceUnloaded();
+      }
     } catch (error) {
       return releaseDrainAfterFailure(lease, error);
     }
@@ -303,15 +347,23 @@ export async function stopService(config: AppConfig): Promise<ServiceStatus> {
 }
 
 export async function uninstallService(config: AppConfig): Promise<ServiceStatus> {
-  assertMacOs();
+  assertSupported();
   if (getServiceStatus().loaded) {
     const lease = await acquireDrain(config);
     try {
-      runChecked("launchctl", ["bootout", serviceTarget()]);
-      await waitForServiceUnloaded();
+      if (process.platform === "linux") {
+        stopSystemdUnit(SYSTEMD_UNIT);
+      } else {
+        runChecked("launchctl", ["bootout", serviceTarget()]);
+        await waitForServiceUnloaded();
+      }
     } catch (error) {
       return releaseDrainAfterFailure(lease, error);
     }
+  }
+  if (process.platform === "linux") {
+    if (getServiceStatus().supported) uninstallSystemdUnit(SYSTEMD_UNIT);
+    return getServiceStatus();
   }
   rmSync(plistPath(), { force: true });
   return getServiceStatus();

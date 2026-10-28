@@ -35,13 +35,6 @@ const expected = [
 for (const [path, needle] of expected) {
   if (!readFileSync(resolve(root, path), "utf8").includes(needle)) throw new Error(`${path} is not synchronized to ${packageVersion}`);
 }
-for (const path of ["README.md", "README.zh-CN.md", "README.ja.md", "README.ko.md"]) {
-  const readme = readFileSync(resolve(root, path), "utf8");
-  for (const target of ["win-x64.exe", "mac-arm64.dmg", "mac-x64.dmg", "linux-x64.AppImage"]) {
-    const download = `/releases/download/v${packageVersion}/codex-web-gpt-${packageVersion}-${target}`;
-    if (!readme.includes(download)) throw new Error(`${path} download for ${target} is not synchronized to ${packageVersion}`);
-  }
-}
 const releaseWorkflow = readFileSync(resolve(root, ".github/workflows/release.yml"), "utf8");
 for (const arch of ["amd64", "arm64"]) {
   if (!releaseWorkflow.includes(`runtime_asset: codex-chatgpt-web-linux-${arch}.tar.gz`)) {
@@ -51,6 +44,4 @@ for (const arch of ["amd64", "arm64"]) {
 if (releaseWorkflow.split(`bun-version: ${bunVersion}`).length - 1 !== 2) {
   throw new Error(`release.yml must pin Bun ${bunVersion} in both jobs`);
 }
-const launcherVersion = (JSON.parse(readFileSync(resolve(root, "launcher/package.json"), "utf8")) as { version?: string }).version;
-if (launcherVersion !== packageVersion) throw new Error(`launcher/package.json is not synchronized to ${packageVersion}`);
 process.stdout.write(`VERSION_SYNC_OK ${packageVersion} bun@${bunVersion}\n`);

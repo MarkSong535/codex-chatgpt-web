@@ -3,60 +3,109 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/download/v6.1.14/codex-web-gpt-6.1.14-win-x64.exe"><img src="assets/readme/download-windows.svg" width="224" height="64" alt="Windows · x64"></a>&nbsp;
-  <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/download/v6.1.14/codex-web-gpt-6.1.14-mac-arm64.dmg"><img src="assets/readme/download-macos.svg" width="224" height="64" alt="macOS · Apple silicon"></a>&nbsp;
-  <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/download/v6.1.14/codex-web-gpt-6.1.14-linux-x64.AppImage"><img src="assets/readme/download-linux.svg" width="224" height="64" alt="Linux · x64"></a>
-</p>
-
-<p align="center">
-  <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/download/v6.1.14/codex-web-gpt-6.1.14-mac-x64.dmg">macOS Intel</a> · <a href="https://github.com/miuuyy/codex-chatgpt-web/releases/latest">All releases</a>
-</p>
-
-<p align="center">
   <a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.ja.md">日本語</a> · <a href="README.ko.md">한국어</a>
 </p>
 
 <p align="center">
-  <img src="assets/demo.gif" width="960" alt="A live ChatGPT Web turn using the native Codex harness">
+  <a href="#get-started">Get started</a> · <a href="#sign-in">Sign-in & 2FA</a> · <a href="docs/architecture.md">Architecture</a> · <a href="TROUBLESHOOTING.md">Troubleshooting</a>
 </p>
 
-<p align="center">
-  <a href="#get-started">Get started</a> · <a href="https://github.com/miuuyy/codex-chatgpt-web/releases">What’s new</a> · <a href="docs/architecture.md">Architecture</a> · <a href="TROUBLESHOOTING.md">Troubleshooting</a>
-</p>
+Use the ChatGPT Web models available on your account, including Pro, from Codex's native model
+picker, with ChatGPT Web's separate usage limits and without spending your Work or Codex quota.
 
-Use the ChatGPT Web models available on your account, including Pro, from Codex’s native model picker—with ChatGPT Web’s separate usage limits, without spending your Work or Codex quota. Keep the same interface, tasks, images, and streaming.
-
-Full harness mode connects ChatGPT to the current task’s files, terminal, tools, and approvals through MCP. Conversations stay tied to your Codex task, so you can keep working as the context grows.
+This edition is a **command-line runtime for machines without a monitor**. On Linux it runs an
+ordinary Google Chrome or Chromium on a private Xvfb virtual display, renders with SwiftShader when
+there is no GPU, signs in with your account email and password, and fills two-factor codes for you.
+It is built for servers, containers, and other machines without a display; it also runs on a macOS
+or Linux desktop. (ChatGPT rejects headless Chrome, so Chrome is never run in headless mode.)
 
 <div id="get-started"><a id="quick-start"></a></div>
 
 ## Get started
 
-**Available models:** Free/Go → **Luna / Think**. Paid accounts → **GPT-6 Sol** and **GPT-5.6 Sol**, with **Instant–High**, plus **Extra High** and **Pro** when available. Each version has its own entry; existing GPT-5.6 chats keep GPT-5.6. Availability depends on your account and workspace.
+**Available models:** Free/Go → **Luna / Think**. Paid accounts → **GPT-6 Sol** and **GPT-5.6 Sol**,
+with **Instant–High**, plus **Extra High** and **Pro** when available. Availability depends on your
+account and workspace.
 
-1. **Install the launcher** using the download for your system above.
-2. **Sign in to ChatGPT** in the embedded browser and run the browser smoke test.
-3. **Install models** and restart Codex once. In automatic mode, choose a model ending in **(Web)**. Pro versions have separate entries; Sol reasoning is selected through Effort. Zero Risk keeps its dedicated entry.
-4. **For coding with tools**, open **MCP** in the launcher and complete the Full harness setup below.
+1. **Install Chrome or Chromium, and on Linux Xvfb.** For example
+   `sudo apt install chromium xvfb` on Debian or Ubuntu. The usual Chrome locations are found
+   automatically; otherwise pass `--chrome PATH`.
+2. **Install the runtime** (macOS or Linux, x64 or arm64):
 
-The app includes its browser and runtime. No separate Chrome, Node, or Bun installation is needed.
+   ```bash
+   curl -fsSL https://github.com/miuuyy/codex-chatgpt-web/releases/latest/download/install.sh | sh
+   ```
+
+3. **Set up and sign in.** Setup asks for anything you leave out, shows each sign-in step, and
+   asks for the two-factor code when OpenAI requests one:
+
+   ```bash
+   codex-chatgpt-web setup --browser-only --email you@example.com --acknowledge-unofficial
+   ```
+
+4. **Restart Codex once** and choose a model ending in **(Web)**.
+5. **For coding with tools**, complete the [Full harness](#full-harness) setup.
+
+On Linux the daemon and tunnel run as `systemd --user` services; run
+`sudo loginctl enable-linger "$USER"` once so they keep running after you log out. In a container
+without systemd, setup prints the two commands to keep running yourself
+(`codex-chatgpt-web serve` and, in full mode, `codex-chatgpt-web tunnel run`).
+
+<a id="sign-in"></a>
+
+## Sign-in & two-factor verification
+
+Sign-in runs in Chrome (on the private display on Linux) and reports each step:
+
+```text
+[1/7] Launch Chrome
+[2/7] Open the ChatGPT sign-in page
+[3/7] Enter the account email
+[4/7] Enter the password
+[5/7] Two-factor verification: waiting for an authenticator app code
+      Two-factor verification: open your authenticator app.
+      Enter the authenticator app code: 123456
+[5/7] Two-factor verification: entering the code
+[6/7] Confirm the signed-in session
+[7/7] Save the session
+```
+
+| Input | Flag | Environment variable | If missing |
+| --- | --- | --- | --- |
+| Account email | `--email EMAIL` | `CODEX_CHATGPT_WEB_EMAIL` | Prompted |
+| Password | `--password-file PATH` | `CODEX_CHATGPT_WEB_PASSWORD` | Prompted without echo |
+| Authenticator secret | `--totp-secret-file PATH` | `CODEX_CHATGPT_WEB_TOTP_SECRET` | You are asked for each code |
+
+- **Authenticator apps:** pass the setup key shown under "can't scan the QR code" (base32) or the
+  full `otpauth://` URI, and codes are generated automatically. Without it you type each code.
+- **Email or SMS codes** are always asked for in the terminal.
+- **Unattended runs** (no terminal) need the password from a file or environment variable and,
+  for accounts with an authenticator, the TOTP secret.
+- Passwords are never accepted as command-line arguments, and neither the password nor the TOTP
+  secret is stored. Only the resulting ChatGPT session is saved, owner-only, under
+  `~/.codex-chatgpt-web/browser/`. Keep secret files `chmod 600`.
+- **Refresh an expired session** with `codex-chatgpt-web login` (same flags).
+- **Human-verification checks** (Cloudflare, Arkose) are never solved automatically; sign-in
+  stops with a screenshot. Retry later, or create a session on a computer with a browser and pass
+  it with `--import-login FILE`, for example
+  `npx playwright codegen --save-storage=chatgpt.json https://chatgpt.com`.
+- Social sign-in (Google, Microsoft, Apple) and passkeys are not supported; use an account with
+  an OpenAI password.
 
 <details>
-<summary><strong>Terminal install, updates & repair</strong></summary>
+<summary><strong>Chrome, virtual display & GPU</strong></summary>
 
-Quit the launcher before updating. These installers select the platform and architecture, verify the published checksums, and preserve your ChatGPT profile and launcher settings.
-
-**macOS / Linux**
-
-```bash
-curl -fsSL https://github.com/miuuyy/codex-chatgpt-web/releases/latest/download/install-launcher.sh | sh
-```
-
-**Windows PowerShell**
-
-```powershell
-irm https://github.com/miuuyy/codex-chatgpt-web/releases/latest/download/install-launcher.ps1 | iex
-```
+- On Linux, Chrome runs on its own Xvfb display (`-nolisten tcp`), started on demand and stopped
+  with the process, so nothing appears on any desktop. Without Xvfb it uses an existing display,
+  and fails with an install hint when there is none.
+- On macOS, Chrome opens an ordinary window while it works.
+- `--chrome-gpu auto` (default) uses SwiftShader software rendering on the virtual display and on
+  Linux hosts without a `/dev/dri/renderD*` node; `software` forces it and `hardware` leaves the
+  choice to Chrome.
+- On Linux `--disable-dev-shm-usage` is always added, and `--no-sandbox` when running as root.
+- Environment overrides: `CODEX_CHATGPT_WEB_CHROME_GPU=software|hardware`,
+  `CODEX_CHATGPT_WEB_XVFB=0` (use the existing display), and `CODEX_CHATGPT_WEB_CHROME_ARGS`
+  (extra space-separated Chrome flags).
 
 </details>
 
@@ -65,15 +114,13 @@ irm https://github.com/miuuyy/codex-chatgpt-web/releases/latest/download/install
 
 <a id="modes"></a>
 
-Automatic modes offer Luna/Think when the account has no reasoning selector; otherwise Instant–High, with Extra High and Pro available independently when exposed by the account.
-
 | Mode | Sending messages | Local Codex tools |
 | --- | --- | --- |
-| **Browser-only** | Automatic | No |
-| **Full harness (With Automation)** | Automatic | Yes, through MCP |
-| **Zero Risk** | Paste and send manually | Yes, through a separate MCP connector |
+| **Browser-only** (`--browser-only`) | Automatic | No |
+| **Full harness** (`--full`) | Automatic | Yes, through MCP |
 
-Zero Risk does not read or operate the ChatGPT page. Choose the model and `Codex Zero Risk` connector yourself, paste and send the prepared prompt, then confirm **Sent** in the launcher. Automatic models ending in **(Web)** expose their supported Effort choices in Codex. Instant and each Pro version have separate entries to preserve their context budgets; older saved model entries keep their original fixed mode.
+Automatic models ending in **(Web)** expose their supported Effort choices in Codex. Instant and
+each Pro version have separate entries to preserve their context budgets.
 
 <a id="full-harness"></a>
 
@@ -83,36 +130,21 @@ Full mode connects ChatGPT's tool calls back to the current Codex task through t
 [OpenAI tunnel-client](https://github.com/openai/tunnel-client). The tunnel is outbound: it does
 not expose a public IP, open an inbound port, or require router forwarding.
 
-The launcher uses your system proxy for the tunnel. Explicitly configured proxy
-environment variables take priority; local connections stay local.
-
-The launcher's **MCP** page guides the complete setup. For the exact clicks, see the
-[video walkthroughs](TROUBLESHOOTING.md).
-
-> **Limits**
->
-> See [Limits](https://github.com/miuuyy/codex-chatgpt-web/discussions/309) for the current
-> ChatGPT message allowances for **GPT-5.6 Sol Pro** and **GPT-6 Astra**. Context limits depend on
-> the account type and selected effort. Plus Medium/High uses a measured 90,000-token window.
-> GPT-5.6 supports up to 270,000 tokens with experimental **3× context** enabled, with native
-> Codex compaction supported throughout.
->
-> GPT-6 Sol supports Bigger Context at Medium, High and available Extra High: **120,000 tokens
-> on Plus**, with compaction at **110,000**, and **240,000 on Pro**, with compaction at **220,000**.
-> GPT-6 Instant uses standard context.
-> GPT-5.6 and GPT-6 Pro keep their existing Bigger Context limits.
-
-1. Finish the required setup, open **MCP**, create the Tunnel and regular API key, then press
-   **Connect harness**.
-2. Enable ChatGPT **Developer Mode** and create a new Tunnel connector named exactly
+1. Create a tunnel and a runtime key with **Tunnels Read + Use**
+   (`codex-chatgpt-web open tunnels`, `codex-chatgpt-web open runtime-keys`), then run
+   `codex-chatgpt-web setup --full --tunnel-id ID --runtime-key-file PATH --acknowledge-unofficial`.
+2. Enable ChatGPT **Developer Mode** and create a Tunnel connector named exactly
    **Codex Native2**, with **Authentication: None** and **Allow all actions**.
-3. Run **Verify runtime** to confirm that **Codex Native2** is attached and available.
+3. Run `codex-chatgpt-web doctor` to confirm the daemon and tunnel are ready.
 
 Write/modify actions also require the ChatGPT workspace and its administrator policy to permit
 them. See
 [developer mode and MCP apps](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt).
 Unexpected approval prompts fail closed unless `--auto-approve-tool-calls` is explicitly enabled;
 that option clicks **Allow once**, never a permanent grant.
+
+Each turn opens a fresh ChatGPT conversation. When Codex compacts a long task, the compaction runs
+as a read-only turn over the complete Codex context.
 
 </details>
 
@@ -121,11 +153,8 @@ that option clicks **Allow once**, never a permanent grant.
 
 <a id="operations"></a>
 
-Use **Activity** for safe local diagnostics and **Settings → Run doctor** for end-to-end health.
-Settings can also cancel a retained browser turn or remove the Codex integration before uninstall.
-Task conversations always use ordinary chats and remain in ChatGPT history. ChatGPT memory and
-custom instructions may apply. **New browser chat for each turn** separately controls conversation
-reuse. The retired saved-chat preference is discarded when loading an older configuration.
+`codex-chatgpt-web doctor` checks Chrome, the stored login, the Codex route, the daemon, and in
+full mode the tunnel. `codex-chatgpt-web browser check` launches Chrome once.
 Set `CODEX_CHATGPT_WEB_BROWSER_DIAGNOSTICS=1` only when every browser checkpoint needs a screenshot.
 
 New installs use **Compatibility V1** for cross-backend subagents. **Native** preserves Codex's own
@@ -147,21 +176,16 @@ codex-chatgpt-web subagents native
 
 - This is unofficial browser automation, not an OpenAI API. ChatGPT UI changes can break selectors;
   drift fails explicitly instead of silently switching model or transport.
-- Browser state is a sensitive login artifact, and the loopback listener is reachable by processes
-  running as the same local user. Never share the launcher profile; use a trusted workstation.
-- Release packages currently target macOS 13+ (arm64/x64), Windows x64, and Linux x64. Runtime,
-  tests, and packaging are gated on all three in CI; account-bound browser and MCP flows use the
-  separate [release validation](docs/release-validation.md).
-- Builds are not yet platform-signed, so Gatekeeper or SmartScreen may warn. The installers verify
-  the published SHA-256 manifest before installation.
+- The stored browser session is a sensitive login artifact, and the loopback listener is reachable
+  by processes running as the same local user. Use a trusted, single-user host.
+- Release runtimes target macOS 13+ and Linux (x64 and arm64). Windows can run from source, but
+  setup and background services are supported on macOS and Linux only.
 
 Read the complete [architecture](docs/architecture.md) and
 [security model](docs/security-model.md) before enabling full mode. Report vulnerabilities through
 [SECURITY.md](SECURITY.md).
 
 Task prompts are processed by OpenAI and conversations remain in your ChatGPT history.
-
-Validation coverage: [release validation](docs/release-validation.md).
 
 This is independent software and is not affiliated with or endorsed by OpenAI. Use it only with
 your own account and in accordance with applicable [Terms of Use](https://openai.com/policies/terms-of-use/)
@@ -177,37 +201,21 @@ and workspace policies; it does not bypass authentication or access controls.
 ```bash
 git clone https://github.com/miuuyy/codex-chatgpt-web.git && \
 cd codex-chatgpt-web && \
-bun run app
+bun install --frozen-lockfile && \
+bun run src/cli.ts setup --browser-only --email you@example.com --acknowledge-unofficial
 ```
 
-This source path requires Bun 1.4.0. The command installs locked dependencies and opens the app.
+This source path requires Bun 1.4.0.
 
 ```bash
-bun run app
-bun run dev:launcher
-bun run src/cli.ts dev status
-bun run dev:chat compaction-lab "Reply with exactly: DEV READY"
 bun run verify
+bun run build
+bun run smoke
 bun run smoke:subagents
-bun run app:package
 ```
 
-`dev:launcher` uses a separate profile and account under `~/.codex-chatgpt-web-dev`. `dev:chat` exercises the real browser and compaction paths with explicit simulated tool results, without changing your normal Codex route. See the [DEV chat harness](docs/dev-chat.md) for setup and commands.
-
 </details>
-
-## Star History
-
-<a href="https://www.star-history.com/?repos=miuuyy%2Fcodex-chatgpt-web&type=date&legend=top-left">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=miuuyy/codex-chatgpt-web&type=date&theme=dark&legend=top-left&sealed_token=hBVvg_eOjfMFDrfyeo5FPQkIwcvBEmXc6F7ZoOKnfFE4KPCs67o34w4XwVuM-bHGnKR-SKCAN_TSTWrzuqSBNU-RjNZCLT4f-xNs9qcDhciQtemxHKuuFj0N5YNqZIihdaQfakrh2ANhOrvP0K2LmLXX2zbsYyVaYZknyTnlYeIS_mOGvMcO32ZmPCHK">
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=miuuyy/codex-chatgpt-web&type=date&legend=top-left&sealed_token=hBVvg_eOjfMFDrfyeo5FPQkIwcvBEmXc6F7ZoOKnfFE4KPCs67o34w4XwVuM-bHGnKR-SKCAN_TSTWrzuqSBNU-RjNZCLT4f-xNs9qcDhciQtemxHKuuFj0N5YNqZIihdaQfakrh2ANhOrvP0K2LmLXX2zbsYyVaYZknyTnlYeIS_mOGvMcO32ZmPCHK">
-    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=miuuyy/codex-chatgpt-web&type=date&legend=top-left&sealed_token=hBVvg_eOjfMFDrfyeo5FPQkIwcvBEmXc6F7ZoOKnfFE4KPCs67o34w4XwVuM-bHGnKR-SKCAN_TSTWrzuqSBNU-RjNZCLT4f-xNs9qcDhciQtemxHKuuFj0N5YNqZIihdaQfakrh2ANhOrvP0K2LmLXX2zbsYyVaYZknyTnlYeIS_mOGvMcO32ZmPCHK">
-  </picture>
-</a>
 
 ---
 
 [Troubleshooting](TROUBLESHOOTING.md) · [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md) · [MIT license](LICENSE) · [CI](https://github.com/miuuyy/codex-chatgpt-web/actions/workflows/ci.yml)
-
-Also by me: <img src="assets/readme/persona-voice.svg" width="20" height="20" alt=""> [ChatGPT Persona Voice](https://github.com/miuuyy/ChatGPT-Persona-Voice) — local, near-real-time custom voices for ChatGPT and Codex.

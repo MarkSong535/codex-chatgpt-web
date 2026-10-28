@@ -4,8 +4,18 @@ import { dirname, join } from "node:path";
 import type { AppConfig } from "./config";
 import { atomicWriteFile, getConfigDir } from "./config";
 import { runCommand, runChecked } from "./process";
+import {
+  installSystemdUnit,
+  startSystemdUnit,
+  stopSystemdUnit,
+  systemdUnitFile,
+  systemdUnitMatches,
+  systemdUnitStatus,
+  uninstallSystemdUnit,
+} from "./systemd-user";
 
 const LABEL = "io.github.codex-chatgpt-web.tunnel";
+const SYSTEMD_UNIT = "codex-chatgpt-web-tunnel.service";
 
 export interface TunnelServiceStatus {
   supported: boolean;
@@ -42,16 +52,37 @@ function settings(config: AppConfig) {
   return config.tunnel;
 }
 
-function assertMacOs(): void {
-  if (process.platform !== "darwin") {
-    throw new Error("Managed tunnel service installation is currently supported on macOS only");
+function assertSupported(): void {
+  if (process.platform !== "darwin" && process.platform !== "linux") {
+    throw new Error("Managed tunnel services are supported on macOS (launchd) and Linux (systemd --user)");
   }
 }
 
-export function tunnelServiceDefinition(config: AppConfig): string {
+function tunnelArgs(config: AppConfig): string[] {
   const tunnel = settings(config);
+  return [tunnel.binaryPath, "run", "--profile-dir", tunnel.profileDir, "--profile", tunnel.profileName];
+}
+
+/** The tunnel client command that the services run, for hosts that supervise it themselves. */
+export function tunnelForegroundCommand(config: AppConfig): string[] {
+  return tunnelArgs(config);
+}
+
+function tunnelSystemdUnit(config: AppConfig): string {
   const logDir = join(getConfigDir(), "logs");
-  const args = [tunnel.binaryPath, "run", "--profile-dir", tunnel.profileDir, "--profile", tunnel.profileName];
+  return systemdUnitFile({
+    description: "codex-chatgpt-web MCP tunnel",
+    execStart: tunnelArgs(config),
+    environment: { CODEX_CHATGPT_WEB_HOME: getConfigDir(), MCP_STDIO_SEND_INITIALIZED_NOTIFICATION: "true" },
+    stdoutPath: join(logDir, "tunnel.stdout.log"),
+    stderrPath: join(logDir, "tunnel.stderr.log"),
+  });
+}
+
+export function tunnelServiceDefinition(config: AppConfig): string {
+  if (process.platform === "linux") return tunnelSystemdUnit(config);
+  const logDir = join(getConfigDir(), "logs");
+  const args = tunnelArgs(config);
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -87,6 +118,17 @@ ${args.map(arg => `    <string>${xml(arg)}</string>`).join("\n")}
 }
 
 export function getTunnelServiceStatus(): TunnelServiceStatus {
+  if (process.platform === "linux") {
+    const status = systemdUnitStatus(SYSTEMD_UNIT);
+    return {
+      supported: status.supported,
+      installed: status.installed,
+      loaded: status.active,
+      running: status.active,
+      label: SYSTEMD_UNIT,
+      definitionPath: status.path,
+    };
+  }
   if (process.platform !== "darwin") {
     return { supported: false, installed: false, loaded: false, running: false, label: LABEL };
   }
@@ -103,18 +145,26 @@ export function getTunnelServiceStatus(): TunnelServiceStatus {
 }
 
 export function tunnelServiceDefinitionMatches(config: AppConfig): boolean {
+  if (process.platform === "linux") return systemdUnitMatches(SYSTEMD_UNIT, tunnelServiceDefinition(config));
   const path = plistPath();
   return existsSync(path) && readFileSync(path, "utf8") === tunnelServiceDefinition(config);
 }
 
 export function installTunnelService(config: AppConfig): TunnelServiceStatus {
-  assertMacOs();
+  assertSupported();
   const tunnel = settings(config);
   const profile = join(tunnel.profileDir, `${tunnel.profileName}.yaml`);
   if (!existsSync(tunnel.binaryPath)) throw new Error(`Tunnel client is missing: ${tunnel.binaryPath}`);
   if (!existsSync(profile)) throw new Error(`Tunnel profile is missing: ${profile}`);
   const current = getTunnelServiceStatus();
   const next = tunnelServiceDefinition(config);
+  if (process.platform === "linux") {
+    if (current.loaded && !systemdUnitMatches(SYSTEMD_UNIT, next)) {
+      throw new Error("Refusing to replace a running tunnel service definition; stop it before installing the update");
+    }
+    installSystemdUnit(SYSTEMD_UNIT, next, join(getConfigDir(), "logs"));
+    return getTunnelServiceStatus();
+  }
   if (current.loaded && (!current.installed || readFileSync(plistPath(), "utf8") !== next)) {
     throw new Error("Refusing to replace a loaded tunnel service definition; stop it before installing the update");
   }
@@ -126,7 +176,11 @@ export function installTunnelService(config: AppConfig): TunnelServiceStatus {
 }
 
 export function startTunnelService(): TunnelServiceStatus {
-  assertMacOs();
+  assertSupported();
+  if (process.platform === "linux") {
+    startSystemdUnit(SYSTEMD_UNIT);
+    return getTunnelServiceStatus();
+  }
   if (!existsSync(plistPath())) throw new Error("Tunnel service is not installed; rerun full setup");
   if (!getTunnelServiceStatus().loaded) runChecked("launchctl", ["bootstrap", launchDomain(), plistPath()]);
   return getTunnelServiceStatus();
@@ -141,7 +195,11 @@ async function waitForTunnelServiceUnloaded(timeoutMs = 20_000): Promise<void> {
 }
 
 export async function stopTunnelService(): Promise<TunnelServiceStatus> {
-  assertMacOs();
+  assertSupported();
+  if (process.platform === "linux") {
+    if (getTunnelServiceStatus().loaded) stopSystemdUnit(SYSTEMD_UNIT);
+    return getTunnelServiceStatus();
+  }
   if (getTunnelServiceStatus().loaded) {
     runChecked("launchctl", ["bootout", serviceTarget()]);
     await waitForTunnelServiceUnloaded();
@@ -155,8 +213,12 @@ export async function restartTunnelService(): Promise<TunnelServiceStatus> {
 }
 
 export async function uninstallTunnelService(): Promise<TunnelServiceStatus> {
-  assertMacOs();
+  assertSupported();
   await stopTunnelService();
+  if (process.platform === "linux") {
+    if (getTunnelServiceStatus().supported) uninstallSystemdUnit(SYSTEMD_UNIT);
+    return getTunnelServiceStatus();
+  }
   rmSync(plistPath(), { force: true });
   return getTunnelServiceStatus();
 }

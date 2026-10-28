@@ -10,10 +10,8 @@ import {
 
 /** Apply the user's prediction policy without changing the originating task's model or settings. */
 export function configureComposerPrediction(parsed: CodexParsedRequest, config: AppConfig): AppConfig {
-  if (!config.composerPredictionsEnabled) throw new Error("Next-message predictions are disabled in Launcher settings.");
-  if (config.browserInteractionMode !== "automatic" || !config.solAvailable) {
-    throw new Error("Next-message predictions require GPT-6 Sol Medium in Automatic mode.");
-  }
+  if (!config.composerPredictionsEnabled) throw new Error("Next-message predictions are disabled (setup --no-composer-predictions).");
+  if (!config.solAvailable) throw new Error("Next-message predictions require GPT-6 Sol Medium.");
   parsed.modelId = "chatgpt-web/gpt-6-sol";
   parsed.options.reasoning = "medium";
   // This app-generated turn only suggests text for the empty composer. It must not perform work.

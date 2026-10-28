@@ -4,7 +4,6 @@ import {
   CHATGPT_WEB_BACKEND_MODEL,
   CHATGPT_WEB_BIGGER_CONTEXT_MULTIPLIER,
   CHATGPT_WEB_PLATFORM_RESERVE_TOKENS,
-  isChatGptWebZeroRiskBackendModel,
   resolveChatGptWebContextLimits,
   resolveChatGptWebMessageTokenBudget,
   resolveChatGptWebTransportLimits,
@@ -42,10 +41,7 @@ export function estimateChatGptWebInputTokens(
   capabilities: ChatGptWebCapabilities,
   options: CompileChatGptWebPromptOptions = {},
 ): number {
-  const manual = isChatGptWebZeroRiskBackendModel(parsed.modelId);
-  const mode = manual
-    ? { localTools: true }
-    : resolveChatGptWebModelMode(parsed.modelId, parsed.options.reasoning, capabilities);
+  const mode = resolveChatGptWebModelMode(parsed.modelId, parsed.options.reasoning, capabilities);
   const identity = extractChatGptTurnIdentity(parsed);
   const compiled = compileChatGptWebPrompt(
     parsed,
@@ -53,7 +49,6 @@ export function estimateChatGptWebInputTokens(
     mode.localTools ? ESTIMATE_TURN_TOKEN : undefined,
     {
       ...options,
-      ...(manual ? { manualControl: true as const } : {}),
       captureLunaCheckpoint: options.captureLunaCheckpoint ?? (parsed.modelId === CHATGPT_WEB_LUNA_MODEL_ID
         && !parsed._compactionRequest
         && Boolean(identity.threadId && identity.turnId)),
@@ -73,9 +68,6 @@ export function resolveBiggerContextMultipartParts(
   experimentalSkillAttachments = false,
   appName?: string,
 ): ChatGptWebMultipartPartCount | undefined {
-  if (isChatGptWebZeroRiskBackendModel(parsed.modelId)) {
-    throw new Error("Bigger Context is unavailable for ChatGPT Zero Risk");
-  }
   const mode = resolveChatGptWebModelMode(parsed.modelId, parsed.options.reasoning, capabilities);
   if (!supportsChatGptWebBiggerContext(parsed.modelId, mode.effort, parsed._chatgptModelFamily)) return undefined;
   if (parsed._compactionRequest) return CHATGPT_BIGGER_CONTEXT_PARTS;

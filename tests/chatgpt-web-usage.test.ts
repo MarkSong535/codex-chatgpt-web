@@ -43,9 +43,6 @@ test.each([undefined, 2] as const)("context diagnostics separate instructions fr
   expect(counts!.developer!.records).toBe(1); // additional_tools is a registry, not a developer message.
   expect(counts!.system!.tokens).toBeGreaterThan(counts!.user!.tokens);
   expect(JSON.stringify(counts)).not.toContain("PRIVATE");
-  const { sanitizeForExport } = require("../launcher/electron/logging.cjs");
-  const logLine = `[chatgpt-web] context_token_breakdown ${JSON.stringify({ byRole: counts })}`;
-  expect(sanitizeForExport(logLine)).toBe(logLine);
   for (const group of Object.values(counts!)) {
     expect(Object.keys(group).sort()).toEqual(["chars", "records", "tokens"]);
     expect(group.records).toBe(1);

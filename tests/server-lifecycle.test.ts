@@ -11,11 +11,6 @@ import { defaultBrokerEndpoint, defaultConfig, providerConfig } from "../src/con
 import { parseRequest } from "../src/responses/parser";
 import { compactRequest, HttpTurnCounter, ModelCatalogFetches, responseRequest, routeChatGptWebRequest, startServer } from "../src/server";
 
-test("DEV harness configuration cannot bind a Responses listener", () => {
-  const config = { ...defaultConfig("browser-only"), purpose: "dev-harness" as const, port: 0 };
-  expect(() => startServer(config)).toThrow("cannot start a Responses listener");
-});
-
 test("Luna Bigger Context reaches the adapter for every Free route and response mode", async () => {
   for (const mode of ["browser-only", "full"] as const) for (const stream of [false, true]) {
     for (const model of ["chatgpt-web/gpt-5.6-luna", "chatgpt-web/luna", "chatgpt-web/think"]) {

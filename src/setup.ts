@@ -2,23 +2,21 @@ import { existsSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:net";
 import { join } from "node:path";
-import type { AppConfig, BrowserInteractionMode, RuntimeMode, SubagentProtocol } from "./config";
+import type { AppConfig, RuntimeMode, SubagentProtocol } from "./config";
 import type { ChromeGpuMode } from "./chrome-launch";
 import {
   currentRuntimeCommand,
-  defaultBrokerEndpoint,
   defaultConfig,
   getConfigPath,
   loadConfigForSetup,
-  resolveInteractionConnectorIdentities,
+  resolveConnectorName,
   saveConfig,
-  tunnelConfigForInteractionMode,
 } from "./config";
+import { loginWithAccount, type AccountLoginInput } from "./account-login";
 import {
   browserLoginStateExists,
   importBrowserLogin,
   inspectBrowserLoginCapabilities,
-  loginToChatGpt,
   storedBrowserLoginCapabilities,
 } from "./browser-login";
 import {
@@ -26,19 +24,12 @@ import {
   preflightCodexIntegration,
   readCodexSubagentProtocol,
 } from "./codex-integration";
-import { inspectLauncherBrowserHost } from "./launcher-browser-host";
-import {
-  DEV_CONFIG_PURPOSE,
-  DEV_LAUNCHER_PROFILE,
-  DEV_TUNNEL_BASE_NAME,
-} from "./dev-chat/constants";
 import {
   assertServiceIdle,
   getServiceStatus,
   installService,
   removeLegacyRuntimeArtifacts,
   restartService,
-  uninstallService,
 } from "./service";
 import { connectTunnel, createTunnelConfig, installRuntimeKey, installRuntimeKeyBytes, installTunnelClient, managedRuntimeKeyPath, stopTunnel, waitForTunnelReady } from "./tunnel";
 import { getTunnelServiceStatus, installTunnelService, restartTunnelService, stopTunnelService, tunnelServiceDefinitionMatches, uninstallTunnelService } from "./tunnel-service";
@@ -47,24 +38,21 @@ import { VERSION } from "./version";
 export interface SetupOptions {
   connectorNameSuffix?: string;
   mode: RuntimeMode;
-  browserInteractionMode?: BrowserInteractionMode;
   subagentProtocol?: SubagentProtocol;
   port?: number;
   chromeExecutablePath?: string;
-  /** Run managed Chrome with a visible window (on a private Xvfb display when none exists). */
-  headed?: boolean;
   chromeGpu?: ChromeGpuMode;
-  browserHostDescriptorPath?: string;
   refreshAccountCapabilities?: boolean;
   forceLogin?: boolean;
-  /** Playwright storage state captured elsewhere with `login --export-storage-state`. */
+  /** Supplies credentials only once a sign-in is actually needed. */
+  accountLogin?: () => Promise<AccountLoginInput>;
+  /** Playwright storage state for accounts whose sign-in cannot be automated. */
   importLoginPath?: string;
   autoApproveToolCalls?: boolean;
   experimentalBiggerContext?: boolean;
   composerPredictionsEnabled?: boolean;
   experimentalSkillAttachments?: boolean;
   experimentalFreshConversationPerTurn?: boolean;
-  zeroRiskProEnabled?: boolean;
   replaceCodexRoute?: boolean;
   preserveDisconnectedRoute?: boolean;
   restartService?: boolean;
@@ -79,6 +67,8 @@ export interface SetupResult {
   configPath: string;
   loginCreated: boolean;
   serviceLoaded: boolean;
+  /** false on hosts without launchd or systemd --user; the daemon must then be run by hand. */
+  serviceSupported: boolean;
   tunnelReady: boolean | null;
   codexRestartRequired: true;
   connectorSetupRequired: boolean;
@@ -87,14 +77,6 @@ export interface SetupResult {
 interface PreparedSetup {
   existing: AppConfig | undefined;
   config: AppConfig;
-  launcherOwned: boolean;
-}
-
-export interface DevProfileSetupResult {
-  mode: RuntimeMode;
-  configPath: string;
-  tunnelReady: boolean | null;
-  connectorSetupRequired: boolean;
 }
 
 export interface ExistingFullSetupCredentials {
@@ -102,27 +84,8 @@ export interface ExistingFullSetupCredentials {
   runtimeKey: boolean;
 }
 
-export function launcherCapabilityProbeRequired(
-  existing: AppConfig | undefined,
-  refreshAccountCapabilities = false,
-  interactionMode: BrowserInteractionMode = existing?.browserInteractionMode ?? "automatic",
-): boolean {
-  if (interactionMode === "manual") return false;
-  return refreshAccountCapabilities
-    || existing?.browserInteractionMode === "manual"
-    || existing?.browserHost !== "launcher"
-    || typeof existing.solAvailable !== "boolean"
-    || typeof existing.extraHighAvailable !== "boolean"
-    || typeof existing.proAvailable !== "boolean";
-}
-
-export function existingFullSetupCredentials(
-  existing: AppConfig | undefined,
-  interactionMode: BrowserInteractionMode = existing?.browserInteractionMode ?? "automatic",
-): ExistingFullSetupCredentials {
-  const tunnel = existing?.mode === "full"
-    ? tunnelConfigForInteractionMode(existing, interactionMode)
-    : undefined;
+export function existingFullSetupCredentials(existing: AppConfig | undefined): ExistingFullSetupCredentials {
+  const tunnel = existing?.mode === "full" ? existing.tunnel : undefined;
   return {
     tunnelId: Boolean(tunnel?.tunnelId),
     runtimeKey: Boolean(tunnel?.runtimeKeyFile && existsSync(tunnel.runtimeKeyFile)),
@@ -143,15 +106,9 @@ function meaningfulRuntimeChange(before: AppConfig, after: AppConfig): boolean {
     port: before.port,
     contextWindow: before.contextWindow,
     appName: before.appName,
-    automaticAppName: before.automaticAppName,
-    manualAppName: before.manualAppName,
-    browserHost: before.browserHost,
-    browserInteractionMode: before.browserInteractionMode,
-    browserHostDescriptorPath: before.browserHostDescriptorPath,
     chromeExecutablePath: before.chromeExecutablePath,
     storageStatePath: before.storageStatePath,
     brokerSocketPath: before.brokerSocketPath,
-    headed: before.headed,
     chromeGpu: before.chromeGpu,
     solAvailable: before.solAvailable,
     extraHighAvailable: before.extraHighAvailable,
@@ -160,13 +117,10 @@ function meaningfulRuntimeChange(before: AppConfig, after: AppConfig): boolean {
     composerPredictionsEnabled: before.composerPredictionsEnabled,
     experimentalSkillAttachments: before.experimentalSkillAttachments,
     experimentalFreshConversationPerTurn: before.experimentalFreshConversationPerTurn,
-    zeroRiskProEnabled: before.zeroRiskProEnabled,
     autoApproveToolCalls: before.autoApproveToolCalls,
     controlToken: before.controlToken,
     runtimeCommand: before.runtimeCommand,
     tunnel: before.tunnel,
-    automaticTunnel: before.automaticTunnel,
-    manualTunnel: before.manualTunnel,
   }) !== JSON.stringify({
     mode: after.mode,
     subagentProtocol: after.subagentProtocol,
@@ -175,15 +129,9 @@ function meaningfulRuntimeChange(before: AppConfig, after: AppConfig): boolean {
     port: after.port,
     contextWindow: after.contextWindow,
     appName: after.appName,
-    automaticAppName: after.automaticAppName,
-    manualAppName: after.manualAppName,
-    browserHost: after.browserHost,
-    browserInteractionMode: after.browserInteractionMode,
-    browserHostDescriptorPath: after.browserHostDescriptorPath,
     chromeExecutablePath: after.chromeExecutablePath,
     storageStatePath: after.storageStatePath,
     brokerSocketPath: after.brokerSocketPath,
-    headed: after.headed,
     chromeGpu: after.chromeGpu,
     solAvailable: after.solAvailable,
     extraHighAvailable: after.extraHighAvailable,
@@ -192,13 +140,10 @@ function meaningfulRuntimeChange(before: AppConfig, after: AppConfig): boolean {
     composerPredictionsEnabled: after.composerPredictionsEnabled,
     experimentalSkillAttachments: after.experimentalSkillAttachments,
     experimentalFreshConversationPerTurn: after.experimentalFreshConversationPerTurn,
-    zeroRiskProEnabled: after.zeroRiskProEnabled,
     autoApproveToolCalls: after.autoApproveToolCalls,
     controlToken: after.controlToken,
     runtimeCommand: after.runtimeCommand,
     tunnel: after.tunnel,
-    automaticTunnel: after.automaticTunnel,
-    manualTunnel: after.manualTunnel,
   });
 }
 
@@ -207,7 +152,6 @@ export function tunnelWorkerRuntimeChanged(before: AppConfig | undefined, after:
   return before.releaseVersion !== after.releaseVersion
     || JSON.stringify(before.runtimeCommand) !== JSON.stringify(after.runtimeCommand)
     || before.brokerSocketPath !== after.brokerSocketPath
-    || before.browserInteractionMode !== after.browserInteractionMode
     || JSON.stringify(before.tunnel) !== JSON.stringify(after.tunnel);
 }
 
@@ -274,20 +218,10 @@ async function waitForProxy(config: AppConfig, timeoutMs = 10_000): Promise<void
   throw new Error(`Responses proxy did not become ready: ${lastError}`);
 }
 
-function baseConfig(
-  existing: AppConfig | undefined,
-  options: SetupOptions,
-  profile: "production" | "development" = "production",
-): AppConfig {
+function baseConfig(existing: AppConfig | undefined, options: SetupOptions): AppConfig {
   const config = existing ? structuredClone(existing) : defaultConfig(options.mode);
   config.mode = options.mode;
-  if (options.browserInteractionMode) config.browserInteractionMode = options.browserInteractionMode;
-  Object.assign(config, resolveInteractionConnectorIdentities(
-    config.browserInteractionMode,
-    profile,
-    existing,
-    options.connectorNameSuffix,
-  ));
+  config.appName = resolveConnectorName(existing?.appName, options.connectorNameSuffix);
   if (options.subagentProtocol) config.subagentProtocol = options.subagentProtocol;
   config.releaseVersion = VERSION;
   config.runtimeCommand = currentRuntimeCommand();
@@ -296,16 +230,7 @@ function baseConfig(
     config.port = options.port;
   }
   if (options.chromeExecutablePath) config.chromeExecutablePath = options.chromeExecutablePath;
-  if (options.headed !== undefined) config.headed = options.headed;
   if (options.chromeGpu !== undefined) config.chromeGpu = options.chromeGpu;
-  if (options.browserHostDescriptorPath) {
-    config.browserHost = "launcher";
-    config.browserHostDescriptorPath = options.browserHostDescriptorPath;
-    config.brokerSocketPath = defaultBrokerEndpoint();
-  } else if (options.chromeExecutablePath) {
-    config.browserHost = "managed-chrome";
-    delete config.browserHostDescriptorPath;
-  }
   if (options.autoApproveToolCalls !== undefined) config.autoApproveToolCalls = options.autoApproveToolCalls;
   if (options.composerPredictionsEnabled !== undefined) {
     config.composerPredictionsEnabled = options.composerPredictionsEnabled;
@@ -319,37 +244,6 @@ function baseConfig(
   if (options.experimentalBiggerContext !== undefined) {
     config.experimentalBiggerContext = options.experimentalBiggerContext;
   }
-  if (options.zeroRiskProEnabled !== undefined) {
-    if (config.browserInteractionMode !== "manual") {
-      throw new Error("Zero Risk Pro can be configured only with --zero-risk-browser-interaction");
-    }
-    config.zeroRiskProEnabled = options.zeroRiskProEnabled;
-  }
-  if (config.browserInteractionMode === "manual") {
-    if (options.experimentalFreshConversationPerTurn === true) {
-      throw new Error("Fresh browser conversations per turn is available only in automatic mode");
-    }
-    if (options.refreshAccountCapabilities) {
-      throw new Error("Zero Risk cannot refresh account capabilities");
-    }
-    if (options.forceLogin || options.importLoginPath) {
-      throw new Error("Zero Risk uses the launcher's existing ChatGPT session; --login and --import-login are unavailable");
-    }
-    if (options.experimentalSkillAttachments === true) {
-      throw new Error("Zero Risk does not support Skills as files");
-    }
-    if (options.experimentalBiggerContext === true) {
-      throw new Error("Zero Risk does not support Bigger Context");
-    }
-    if (config.mode !== "full") {
-      throw new Error("Zero Risk requires --full so Codex Zero Risk can signal start, tools, and completion");
-    }
-    if (config.browserHost !== "launcher") {
-      throw new Error("Zero Risk requires the Launcher; pass --browser-host-descriptor from the running Launcher");
-    }
-    config.experimentalBiggerContext = false;
-    config.experimentalSkillAttachments = false;
-  }
   if (options.acknowledgedUnofficial) config.acknowledgedUnofficialAt = new Date().toISOString();
   if (!config.acknowledgedUnofficialAt) {
     throw new Error("Setup requires explicit acknowledgement that this is unofficial browser automation. Pass --acknowledge-unofficial.");
@@ -357,96 +251,35 @@ function baseConfig(
   return config;
 }
 
-async function inspectLauncherCapabilities(
-  config: AppConfig,
-  existing: AppConfig | undefined,
-  refreshAccountCapabilities: boolean,
-  expectedProfile: "production" | "development",
-): Promise<{ solAvailable: boolean; extraHighAvailable: boolean; proAvailable: boolean }> {
-  const detectCapabilities = launcherCapabilityProbeRequired(
-    existing,
-    refreshAccountCapabilities,
-    config.browserInteractionMode,
-  );
-  if (!detectCapabilities) {
-    // Updating the local runtime or its settings does not require a live web session.
-    // Only initial setup and an explicit model refresh inspect the account.
-    return {
-      solAvailable: existing!.solAvailable,
-      extraHighAvailable: existing!.extraHighAvailable === true,
-      proAvailable: existing!.proAvailable,
-    };
-  }
-  const inspected = await inspectLauncherBrowserHost(config.browserHostDescriptorPath!, {
-    detectCapabilities: true,
-    expectedProfile,
-  });
-  return {
-    solAvailable: inspected.solAvailable === true,
-    extraHighAvailable: inspected.extraHighAvailable === true,
-    proAvailable: inspected.proAvailable === true,
-  };
-}
-
 async function configureTunnel(config: AppConfig, existing: AppConfig | undefined, options: SetupOptions): Promise<void> {
   if (config.mode === "browser-only") {
     delete config.tunnel;
-    delete config.automaticTunnel;
-    delete config.manualTunnel;
     return;
   }
-  const interactionMode = config.browserInteractionMode;
-  const legacyTunnel = existing?.mode === "full"
-    && !existing.automaticTunnel
-    && !existing.manualTunnel
-    ? existing.tunnel
-    : undefined;
-  let automaticTunnel = existing?.automaticTunnel
-    ?? legacyTunnel;
-  let manualTunnel = existing?.manualTunnel;
-  const existingTunnel = interactionMode === "manual" ? manualTunnel : automaticTunnel;
+  const existingTunnel = existing?.mode === "full" ? existing.tunnel : undefined;
   const tunnelId = options.tunnelId ?? existingTunnel?.tunnelId;
-  if (!tunnelId) {
-    throw new Error(`${interactionMode === "manual" ? "Zero Risk" : "Automatic"} mode requires its own Tunnel ID`);
-  }
+  if (!tunnelId) throw new Error("Full mode requires a Tunnel ID (--tunnel-id)");
   let runtimeKeyFile = existingTunnel?.runtimeKeyFile;
-  const managedKeyFile = managedRuntimeKeyPath(interactionMode);
+  const managedKeyFile = managedRuntimeKeyPath();
   if ((!runtimeKeyFile || !existsSync(runtimeKeyFile)) && existsSync(managedKeyFile)) {
     runtimeKeyFile = managedKeyFile;
   }
-  if (options.runtimeKeyFile) runtimeKeyFile = installRuntimeKey(options.runtimeKeyFile, interactionMode);
-  if (options.runtimeKeyValue) runtimeKeyFile = installRuntimeKeyBytes(options.runtimeKeyValue, interactionMode);
+  if (options.runtimeKeyFile) runtimeKeyFile = installRuntimeKey(options.runtimeKeyFile);
+  if (options.runtimeKeyValue) runtimeKeyFile = installRuntimeKeyBytes(options.runtimeKeyValue);
   if (runtimeKeyFile && runtimeKeyFile !== managedKeyFile && existsSync(runtimeKeyFile)) {
-    runtimeKeyFile = installRuntimeKey(runtimeKeyFile, interactionMode);
+    runtimeKeyFile = installRuntimeKey(runtimeKeyFile);
   }
   if (!runtimeKeyFile || !existsSync(runtimeKeyFile)) {
-    throw new Error(`${interactionMode === "manual" ? "Zero Risk" : "Automatic"} mode requires its own runtime key`);
+    throw new Error("Full mode requires a tunnel runtime key (--runtime-key-file)");
   }
   const installedBinary = await installTunnelClient();
-  const productionProfileName = interactionMode === "manual"
-    ? "codex-chatgpt-web-zero-risk"
-    : "codex-chatgpt-web";
-  const profileName = config.purpose === DEV_CONFIG_PURPOSE
-    ? interactionMode === "manual" ? `${DEV_TUNNEL_BASE_NAME}-zero-risk` : DEV_TUNNEL_BASE_NAME
-    : productionProfileName;
-  const configuredTunnel = createTunnelConfig({
+  config.tunnel = createTunnelConfig({
     binaryPath: installedBinary,
     tunnelId,
     runtimeKeyFile,
-    profileName,
-    alias: profileName,
+    profileName: "codex-chatgpt-web",
+    alias: "codex-chatgpt-web",
   });
-  const otherTunnel = interactionMode === "manual" ? automaticTunnel : manualTunnel;
-  if (otherTunnel?.tunnelId === configuredTunnel.tunnelId) {
-    throw new Error("Automatic and Zero Risk require different Tunnel IDs and separate ChatGPT connectors");
-  }
-  if (interactionMode === "manual") manualTunnel = configuredTunnel;
-  else automaticTunnel = configuredTunnel;
-  config.tunnel = configuredTunnel;
-  if (automaticTunnel) config.automaticTunnel = automaticTunnel;
-  else delete config.automaticTunnel;
-  if (manualTunnel) config.manualTunnel = manualTunnel;
-  else delete config.manualTunnel;
 }
 
 async function bootstrapTunnelProfile(config: AppConfig): Promise<void> {
@@ -475,58 +308,31 @@ async function bootstrapTunnelProfile(config: AppConfig): Promise<void> {
 }
 
 function prepareSetup(options: SetupOptions): PreparedSetup {
-  const existing = loadExistingConfig();
-  if (existing?.purpose === DEV_CONFIG_PURPOSE) {
-    throw new Error("A DEV harness configuration cannot be installed into Codex");
+  if (process.platform !== "darwin" && process.platform !== "linux") {
+    throw new Error("Setup supports macOS and Linux hosts");
   }
+  const existing = loadExistingConfig();
   const config = baseConfig(existing, {
     ...options,
     subagentProtocol: options.subagentProtocol
       ?? readCodexSubagentProtocol(existing?.subagentProtocol ?? "compatibility-v1"),
   });
-  delete config.purpose;
-  const launcherOwned = config.browserHost === "launcher";
-  if (!launcherOwned && process.platform !== "darwin") {
-    throw new Error(
-      "Terminal-only managed Chrome setup currently requires macOS. "
-      + "Use the Codex Web GPT launcher on Windows or Linux.",
-    );
-  }
-  return { existing, config, launcherOwned };
+  return { existing, config };
 }
 
 export function preflightSetup(options: SetupOptions): void {
   const { existing, config } = prepareSetup(options);
   if (config.mode === "full") {
-    const saved = existing?.mode === "full"
-      ? tunnelConfigForInteractionMode(existing, config.browserInteractionMode)
-      : undefined;
-    const tunnelId = options.tunnelId ?? saved?.tunnelId;
-    if (!tunnelId) {
-      throw new Error(
-        `${config.browserInteractionMode === "manual" ? "Zero Risk" : "Automatic"} mode needs its own MCP Tunnel ID`,
-      );
-    }
+    const saved = existing?.mode === "full" ? existing.tunnel : undefined;
+    if (!options.tunnelId && !saved?.tunnelId) throw new Error("Full mode needs an MCP Tunnel ID");
     const savedKey = saved?.runtimeKeyFile;
-    const managedKey = managedRuntimeKeyPath(config.browserInteractionMode);
     const hasRuntimeKey = Boolean(
       options.runtimeKeyValue
       || (options.runtimeKeyFile && existsSync(options.runtimeKeyFile))
       || (savedKey && existsSync(savedKey))
-      || existsSync(managedKey),
+      || existsSync(managedRuntimeKeyPath()),
     );
-    if (!hasRuntimeKey) {
-      throw new Error(
-        `${config.browserInteractionMode === "manual" ? "Zero Risk" : "Automatic"} mode needs its own MCP runtime key`,
-      );
-    }
-    const otherMode = config.browserInteractionMode === "manual" ? "automatic" : "manual";
-    const other = existing?.mode === "full"
-      ? tunnelConfigForInteractionMode(existing, otherMode)
-      : undefined;
-    if (other?.tunnelId === tunnelId) {
-      throw new Error("Automatic and Zero Risk require different Tunnel IDs and separate ChatGPT connectors");
-    }
+    if (!hasRuntimeKey) throw new Error("Full mode needs an MCP runtime key");
   }
   preflightCodexIntegration(config, {
     replaceExistingRoute: options.replaceCodexRoute,
@@ -534,24 +340,13 @@ export function preflightSetup(options: SetupOptions): void {
 }
 
 export async function setup(options: SetupOptions): Promise<SetupResult> {
-  const { existing, config, launcherOwned } = prepareSetup(options);
+  const { existing, config } = prepareSetup(options);
   preflightCodexIntegration(config, {
     replaceExistingRoute: options.replaceCodexRoute,
   });
   const refreshTunnelWorker = tunnelWorkerRuntimeChanged(existing, config);
   if (existing && options.restartService) config.controlToken = randomBytes(32).toString("base64url");
   const beforeService = getServiceStatus();
-  if (launcherOwned && (beforeService.installed || beforeService.loaded)) {
-    if (!existing) {
-      throw new Error("A legacy background service exists without a verifiable configuration; refusing automatic migration");
-    }
-    if (!options.restartService) {
-      throw new Error(
-        "Launcher ownership migration must stop the legacy background service. "
-        + "Retry from the launcher after the active Codex task finishes.",
-      );
-    }
-  }
   if (beforeService.loaded && !existing) {
     throw new Error("A codex-chatgpt-web service is loaded but its configuration is missing; refusing to replace an unverifiable process");
   }
@@ -560,23 +355,7 @@ export async function setup(options: SetupOptions): Promise<SetupResult> {
   let solAvailable: boolean | undefined = config.solAvailable;
   let extraHighAvailable: boolean | undefined = config.extraHighAvailable;
   let proAvailable: boolean | undefined = config.proAvailable;
-  if (config.browserInteractionMode === "manual") {
-    // The generic manual route is independent of account capabilities. The launcher may open the
-    // authenticated surface, but setup must not inspect its model selector or infer availability.
-  } else if (config.browserHost === "launcher") {
-    if (options.forceLogin || options.importLoginPath) {
-      throw new Error("Launcher browser login is owned by the launcher UI; --login and --import-login cannot replace it");
-    }
-    const capabilities = await inspectLauncherCapabilities(
-      config,
-      existing,
-      options.refreshAccountCapabilities === true,
-      "production",
-    );
-    solAvailable = capabilities.solAvailable;
-    extraHighAvailable = capabilities.extraHighAvailable;
-    proAvailable = capabilities.proAvailable;
-  } else {
+  {
     const stored = storedBrowserLoginCapabilities(config);
     solAvailable = stored.solAvailable;
     extraHighAvailable = stored.extraHighAvailable;
@@ -584,7 +363,6 @@ export async function setup(options: SetupOptions): Promise<SetupResult> {
     const loginRequired = options.forceLogin || Boolean(options.importLoginPath) || !browserLoginStateExists(config);
     const capabilityProbeRequired = !loginRequired
       && (options.refreshAccountCapabilities === true
-        || existing?.browserInteractionMode === "manual"
         || solAvailable === undefined
         || extraHighAvailable === undefined
         || proAvailable === undefined);
@@ -596,9 +374,14 @@ export async function setup(options: SetupOptions): Promise<SetupResult> {
     }
     if (beforeService.loaded && (loginRequired || capabilityProbeRequired) && existing) await assertServiceIdle(existing);
     if (loginRequired) {
-      const login = options.importLoginPath
-        ? await importBrowserLogin(config, options.importLoginPath)
-        : await loginToChatGpt(config);
+      let login;
+      if (options.importLoginPath) {
+        login = await importBrowserLogin(config, options.importLoginPath);
+      } else if (options.accountLogin) {
+        login = await loginWithAccount(config, await options.accountLogin());
+      } else {
+        throw new Error("ChatGPT sign-in is required: pass --email (and a password) or --import-login");
+      }
       solAvailable = login.solAvailable;
       extraHighAvailable = login.extraHighAvailable;
       proAvailable = login.proAvailable;
@@ -635,8 +418,9 @@ export async function setup(options: SetupOptions): Promise<SetupResult> {
   if (changedWhileLoaded && !preliminaryChange && existing) await assertServiceIdle(existing);
   if (!beforeService.loaded) await assertPortAvailable(config.host, config.port);
 
-  if (!launcherOwned) {
-    saveConfig(config);
+  saveConfig(config);
+  const serviceSupported = beforeService.supported;
+  if (serviceSupported) {
     installService(config);
     if (changedWhileLoaded && options.restartService && existing) await restartService(existing);
     await waitForProxy(config);
@@ -645,43 +429,36 @@ export async function setup(options: SetupOptions): Promise<SetupResult> {
   let tunnelReady: boolean | null = null;
   if (config.mode === "browser-only" && existing?.mode === "full") {
     const previousTunnelService = getTunnelServiceStatus();
-    if (previousTunnelService.installed || previousTunnelService.loaded) await uninstallTunnelService();
+    if (previousTunnelService.supported && (previousTunnelService.installed || previousTunnelService.loaded)) {
+      await uninstallTunnelService();
+    }
     stopTunnel(existing);
   }
   if (config.mode === "full") {
     const profilePath = join(config.tunnel!.profileDir, `${config.tunnel!.profileName}.yaml`);
     const tunnelService = getTunnelServiceStatus();
     const needsProfile = !existsSync(profilePath);
-    if (launcherOwned) {
-      if (tunnelService.installed || tunnelService.loaded) await uninstallTunnelService();
-      // Commit the inputs before acquiring a runtime. The launcher supervisor creates the
-      // profile, proves readiness/MCP health, and cleans up failed startup under one owner.
-    } else {
-      const needsOwnershipMigration = !tunnelService.installed || !tunnelService.loaded || !tunnelServiceDefinitionMatches(config);
-      if (needsOwnershipMigration || needsProfile) {
-        await assertServiceIdle(config);
-        if (tunnelService.loaded) await stopTunnelService();
-        await bootstrapTunnelProfile(config);
-        installTunnelService(config);
-      } else if (refreshTunnelWorker) {
-        await assertServiceIdle(config);
-        await restartTunnelService();
-      }
+    const needsInstall = !tunnelService.installed || !tunnelService.loaded || !tunnelServiceDefinitionMatches(config);
+    if (!tunnelService.supported) {
+      // Without a service manager the profile is still proven once; the user runs it afterwards.
+      if (needsProfile) await bootstrapTunnelProfile(config);
+      tunnelReady = false;
+    } else if (needsInstall || needsProfile) {
+      await assertServiceIdle(config);
+      if (tunnelService.loaded) await stopTunnelService();
+      await bootstrapTunnelProfile(config);
+      installTunnelService(config);
+    } else if (refreshTunnelWorker) {
+      await assertServiceIdle(config);
+      await restartTunnelService();
+    }
+    if (tunnelService.supported) {
       const status = await waitForTunnelReady(config);
       if (!status.ok) throw new Error(`Tunnel runtime did not become healthy and ready: ${status.detail}`);
       tunnelReady = true;
     }
   }
-  if (launcherOwned && (beforeService.installed || beforeService.loaded)) {
-    await uninstallService(existing!);
-  }
-  if (launcherOwned) saveConfig(config);
-  // Keep the previous terminal runtime intact through the ownership handoff. A later launcher
-  // setup removes it once the launcher-owned configuration is already the established baseline.
-  const migratingTerminalRuntime = Boolean(
-    launcherOwned && existing && existing.browserHost !== "launcher",
-  );
-  if (!migratingTerminalRuntime) removeLegacyRuntimeArtifacts(config);
+  removeLegacyRuntimeArtifacts(config);
   installCodexIntegration(config, {
     replaceExistingRoute: options.replaceCodexRoute,
     preserveDisconnectedRoute: options.preserveDisconnectedRoute,
@@ -691,52 +468,10 @@ export async function setup(options: SetupOptions): Promise<SetupResult> {
     mode: config.mode,
     configPath: getConfigPath(),
     loginCreated,
-    serviceLoaded: launcherOwned ? false : getServiceStatus().loaded,
+    serviceLoaded: getServiceStatus().loaded,
+    serviceSupported,
     tunnelReady,
     codexRestartRequired: true,
-    connectorSetupRequired: config.mode === "full",
-  };
-}
-
-/**
- * Configure the isolated launcher/browser/tunnel inputs used by the repository DEV harness.
- * This deliberately has no Codex integration, Responses listener, or system service; the DEV
- * launcher supervises only the isolated MCP tunnel after this transaction commits.
- */
-export async function setupDevProfile(options: SetupOptions): Promise<DevProfileSetupResult> {
-  const existing = loadExistingConfig();
-  if (existing && existing.purpose !== DEV_CONFIG_PURPOSE) {
-    throw new Error("DEV profile home contains a non-DEV configuration; refusing to repurpose it");
-  }
-  if (!options.browserHostDescriptorPath) {
-    throw new Error("DEV profile setup requires the isolated launcher browser descriptor");
-  }
-  const config = baseConfig(existing, options, DEV_LAUNCHER_PROFILE);
-  if (config.browserHost !== "launcher") {
-    throw new Error("DEV profile setup requires the desktop launcher browser host");
-  }
-  config.purpose = DEV_CONFIG_PURPOSE;
-  if (config.browserInteractionMode === "automatic") {
-    const capabilities = await inspectLauncherCapabilities(
-      config,
-      existing,
-      options.refreshAccountCapabilities === true,
-      DEV_LAUNCHER_PROFILE,
-    );
-    config.solAvailable = capabilities.solAvailable;
-    config.extraHighAvailable = capabilities.solAvailable && capabilities.extraHighAvailable;
-    config.proAvailable = capabilities.solAvailable && capabilities.proAvailable;
-  }
-
-
-  await configureTunnel(config, existing, options);
-  // DEV uses the same supervisor-owned startup after this configuration is committed.
-  const tunnelReady = config.mode === "full" ? false : null;
-  saveConfig(config);
-  return {
-    mode: config.mode,
-    configPath: getConfigPath(),
-    tunnelReady,
     connectorSetupRequired: config.mode === "full",
   };
 }

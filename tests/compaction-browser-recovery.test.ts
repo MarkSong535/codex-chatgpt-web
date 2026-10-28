@@ -9,17 +9,16 @@ import { resolveChatGptWebModelMode } from "../src/adapters/chatgpt-web/model";
 import { ChatGptExternalTurnProgress } from "../src/adapters/chatgpt-web/turn-progress";
 
 test.each([
-  [true, false, true, false, false, false, false],
-  [false, false, true, false, false, false, false],
-  [true, true, true, false, false, false, false],
-  [true, false, false, false, false, false, false],
-  [true, false, true, true, false, false, false],
-  [true, true, false, false, true, false, false],
-  [true, false, true, true, false, true, false],
-  [true, false, true, false, false, false, true],
-])("browser turns preserve recovery, ordering and final-only tools (owned=%s, tools=%s, multipart=%s, size rejected=%s, retained=%s, SSE=%s, GPT-6 Pro=%s)", async (owned, tools, multipart, sizeRejected, retained, sseRejection, gpt6Pro) => {
+  [false, true, false, false, false],
+  [true, true, false, false, false],
+  [false, false, false, false, false],
+  [false, true, true, false, false],
+  [true, false, false, false, false],
+  [false, true, true, true, false],
+  [false, true, false, false, true],
+])("browser turns preserve ordering and final-only tools (tools=%s, multipart=%s, size rejected=%s, SSE=%s, GPT-6 Pro=%s)", async (tools, multipart, sizeRejected, sseRejection, gpt6Pro) => {
   const diagnostics = mkdtempSync(join(tmpdir(), "compaction-observation-"));
-  const cancellationCase = owned && !tools && !multipart;
+  const cancellationCase = !tools && !multipart;
   const effort = gpt6Pro ? "max" : tools ? "xhigh" : "high";
   const finalResponse = cancellationCase ? chatGptBrowserTabClosedError() : new Error("fixture reached final response observation");
   const capabilities = { localToolsEnabled: tools, solAvailable: true, extraHighAvailable: true, proAvailable: true };
@@ -40,7 +39,7 @@ test.each([
     mainFrame: () => frame,
   });
   const worker = Object.assign(Object.create(ChatGptBrowserWorker.prototype), {
-    config: { appName: "Codex Native2", browserDiagnosticsPath: diagnostics, ...(owned ? { browserHostDescriptorPath: "owned-descriptor" } : {}) },
+    config: { appName: "Codex Native2", browserDiagnosticsPath: diagnostics },
     runStage: async (_trace: string, name: string, timeout: number, action: (signal: AbortSignal) => Promise<unknown>) => {
       stage = name;
       if (name === "send" || name.endsWith("_send")) sendBudgets.push(timeout);
@@ -48,8 +47,7 @@ test.each([
     },
     prepareChatSurface: async () => { freshChatPreparations += 1; },
     selectModelAndEffort: async (_page: unknown, model: string, effort: string, _capabilities: unknown,
-      _diagnostic: unknown, trackUsage: boolean, family: string) => {
-      expect(trackUsage).toBe(false);
+      _diagnostic: unknown, family: string) => {
       expect(family).toBe(gpt6Pro && effort === "max" ? "6" : "5.6");
       actions.push(`effort:${effort}`);
       return resolveChatGptWebModelMode(model, effort, capabilities);
@@ -107,26 +105,6 @@ test.each([
     },
     waitForMultipartAcknowledgement: async () => { actions.push("ack"); return { identity: `stage:${actions.length}` }; },
   });
-  if (retained) {
-    // Exercise the real attachment path: the previous Send cleared its mention,
-    // even though this conversation still belongs to the same launcher task.
-    let connectorSelected = false;
-    const composer = {
-      fill: async () => { connectorSelected = false; },
-      focus: async () => {}, press: async () => {},
-    };
-    const absentDialog = { filter: () => absentDialog, last: () => absentDialog, isVisible: async () => false };
-    Object.assign(page, { locator: () => absentDialog });
-    Object.assign(worker, {
-      attachPrompt: (ChatGptBrowserWorker.prototype as any).attachPrompt,
-      attachPromptWithCompactionRetry: (ChatGptBrowserWorker.prototype as any).attachPromptWithCompactionRetry,
-      activeComposer: async () => composer,
-      selectConnector: async () => { connectorSelected = true; actions.push("attach:tools"); return composer; },
-      insertPromptText: async () => { expect(connectorSelected).toBeTrue(); },
-      assertPromptAttached: async () => {},
-      clearChatGptComposerState: async () => { connectorSelected = false; },
-    });
-  }
   const prepare = async () => ({ text: "Summarize the context", images: [], multipart: multipart ? { parts: Array.from({ length: 6 }, (_, index) => JSON.stringify({ part: index + 1 })), commit: "Summarize" } : undefined, release: () => { released = true; } });
   try {
     const run = worker.runBrowserTurn({
@@ -143,8 +121,7 @@ test.each([
         commit: async () => { throw new Error("fixture must stop before completion"); },
       } : undefined,
       prepare,
-      prepareResume: prepare,
-    }, owned ? "owned-surface" : undefined, page, retained);
+    }, page);
     if (sizeRejected) {
       await expect(run).rejects.toMatchObject({ code: "context_length_exceeded", retryable: false });
       expect(rejectionAbortedWait).toBeTrue();
@@ -158,10 +135,8 @@ test.each([
       return;
     }
     await expect(run).rejects.toBe(finalResponse);
-    expect(freshChatPreparations).toBe(retained ? 0 : 1);
-    expect(recoveryCallbacks.map(callback => typeof callback)).toEqual(
-      Array(multipart ? 12 : 2).fill(owned ? "function" : "undefined"),
-    );
+    expect(freshChatPreparations).toBe(1);
+    expect(recoveryCallbacks.map(callback => typeof callback)).toEqual(Array(multipart ? 12 : 2).fill("undefined"));
     expect(actions).toEqual([
       ...(multipart ? [
         "effort:low",
