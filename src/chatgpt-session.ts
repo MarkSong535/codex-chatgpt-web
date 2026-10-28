@@ -287,12 +287,35 @@ async function anyVisible(locator: Locator): Promise<boolean> {
   return false;
 }
 
+/** true/false from ChatGPT's own session endpoint; undefined when it could not be read. */
+export async function chatGptSessionAuthenticated(page: Page): Promise<boolean | undefined> {
+  if (new URL(page.url()).origin !== new URL(CHATGPT_NEW_CHAT_URL).origin) return false;
+  try {
+    return await page.evaluate(async () => {
+      try {
+        const response = await fetch("/api/auth/session", { credentials: "include" });
+        if (!response.ok) return undefined;
+        const body = await response.json() as { user?: unknown; accessToken?: unknown } | null;
+        return Boolean(body?.user && body.accessToken);
+      } catch {
+        return undefined;
+      }
+    });
+  } catch {
+    return undefined;
+  }
+}
+
 export async function assertAuthenticatedChatGptPage(page: Page): Promise<void> {
   const composer = page.locator(
     CHATGPT_COMPOSER_SELECTOR,
   );
   if (!await anyVisible(composer)) {
     throw new Error("ChatGPT authentication could not be verified: no visible composer is present");
+  }
+  // Signed-out ChatGPT also shows a composer; the session endpoint distinguishes the two.
+  if (await chatGptSessionAuthenticated(page) === false) {
+    throw new Error("ChatGPT is signed out: the saved session is missing or expired; run codex-chatgpt-web login");
   }
 }
 

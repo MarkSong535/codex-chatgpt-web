@@ -43,6 +43,17 @@ jobs:
       - name: Archive runtime
         if: runner.os != 'Windows'
         run: tar -czf "${{ matrix.runtime_asset }}" -C dist/runtime .
+      - name: Build and inspect the Debian package
+        if: runner.os == 'Linux'
+        run: |
+          bun run package:deb
+          deb="$(find dist -maxdepth 1 -name 'codex-chatgpt-web_*.deb' -print -quit)"
+          test -n "$deb"
+          dpkg-deb --info "$deb"
+          contents="$(mktemp)"
+          dpkg-deb --contents "$deb" > "$contents"
+          grep -q './usr/bin/codex-chatgpt-web -> ../../opt/codex-chatgpt-web/bin/codex-chatgpt-web' "$contents"
+          grep -q './opt/codex-chatgpt-web/app/cli.js' "$contents"
       - name: Archive Windows runtime
         if: runner.os == 'Windows'
         shell: pwsh
@@ -50,7 +61,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.runner }}
-          path: ${{ matrix.runtime_asset }}
+          path: |
+            ${{ matrix.runtime_asset }}
+            dist/codex-chatgpt-web_*.deb
           if-no-files-found: error
 
   publish:

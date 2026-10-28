@@ -8,6 +8,7 @@ import {
   CHATGPT_COMPOSER_SELECTOR,
   CHATGPT_NEW_CHAT_URL,
   assertNewChatPage,
+  chatGptSessionAuthenticated,
   detectChatGptAccountCapabilities,
 } from "./chatgpt-session";
 import {
@@ -118,21 +119,6 @@ async function firstVisible(locator: Locator): Promise<Locator | undefined> {
     if (await item.isVisible().catch(() => false)) return item;
   }
   return undefined;
-}
-
-/** true/false from ChatGPT's own session endpoint; undefined when it could not be read. */
-async function chatGptSessionAuthenticated(page: Page): Promise<boolean | undefined> {
-  if (new URL(page.url()).origin !== CHATGPT_ORIGIN) return false;
-  return await page.evaluate(async () => {
-    try {
-      const response = await fetch("/api/auth/session", { credentials: "include" });
-      if (!response.ok) return undefined;
-      const body = await response.json() as { user?: unknown; accessToken?: unknown } | null;
-      return Boolean(body?.user && body.accessToken);
-    } catch {
-      return undefined;
-    }
-  }).catch(() => undefined);
 }
 
 function verificationCodeKind(pageText: string): VerificationCodeKind {

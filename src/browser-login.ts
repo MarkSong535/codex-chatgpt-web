@@ -101,7 +101,15 @@ async function inspectStoredState(
     try {
       const verifierPage = await verifierContext.newPage();
       await verifierPage.goto(CHATGPT_NEW_CHAT_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
-      await verifierPage.locator(CHATGPT_COMPOSER_SELECTOR).filter({ visible: true }).first().waitFor({ state: "visible", timeout: 60_000 });
+      // A missing or expired session is redirected to the login page instead of showing a composer.
+      const signedOut = verifierPage.waitForURL(url => url.pathname.startsWith("/auth/"), { timeout: 60_000 })
+        .then(() => true, () => false);
+      const composer = verifierPage.locator(CHATGPT_COMPOSER_SELECTOR).filter({ visible: true }).first()
+        .waitFor({ state: "visible", timeout: 60_000 }).then(() => false);
+      composer.catch(() => {}); // The losing wait rejects when the browser closes.
+      if (await Promise.race([signedOut, composer])) {
+        throw new Error("ChatGPT is signed out: the saved session is missing or expired; run codex-chatgpt-web login");
+      }
       await assertAuthenticatedChatGptPage(verifierPage);
       await assertNewChatPage(verifierPage);
       return { ...await detectChatGptAccountCapabilities(verifierPage), url: verifierPage.url() };

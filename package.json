@@ -34,6 +34,7 @@
     "clean": "bun run scripts/clean.ts",
     "build": "bun run scripts/build-runtime-bundle.ts",
     "smoke": "bun run scripts/smoke-release.ts dist/runtime",
+    "package:deb": "bun run scripts/package-deb.ts dist/runtime dist",
     "smoke:codex": "bun run scripts/smoke-codex-catalog.ts",
     "smoke:cancel": "bun run scripts/smoke-codex-cancel.ts",
     "smoke:interrupt": "bun run scripts/smoke-codex-interrupt.ts",

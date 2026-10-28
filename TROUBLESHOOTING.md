@@ -410,13 +410,17 @@ does not provide credentials or additional allowance for native Image Gen.
 
 ## Update, repair, and remove
 
-To update, rerun the installer command from the README, then rerun `codex-chatgpt-web setup` with
-your usual flags and add `--restart-service`. The stored login and configuration are preserved.
+To update, install the newer `.deb` with `sudo apt install ./codex-chatgpt-web_<version>_<arch>.deb`
+or rerun the installer script, then rerun `codex-chatgpt-web setup` with your usual flags and add
+`--restart-service`. The stored login and configuration are preserved.
 Configurations from releases with the desktop launcher or Zero Risk are adopted by setup; the
 launcher's browser session cannot be reused, so setup signs in again.
 
-To remove everything, run `codex-chatgpt-web uninstall --yes`. It restores Codex's previous route,
-stops and removes the services, and deletes `~/.codex-chatgpt-web` (add `--keep-data` to keep it).
+To remove everything, run `codex-chatgpt-web uninstall --yes` as each user who ran setup **before**
+removing the package. It restores Codex's previous route, stops and removes the services, and deletes
+`~/.codex-chatgpt-web` (add `--keep-data` to keep it). Then remove the program with
+`sudo apt remove codex-chatgpt-web` (or delete `~/.local/lib/codex-chatgpt-web` and
+`~/.local/bin/codex-chatgpt-web` for a script install).
 
 ## Open a useful bug report
 

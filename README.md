@@ -30,7 +30,15 @@ account and workspace.
 1. **Install Chrome or Chromium, and on Linux Xvfb.** For example
    `sudo apt install chromium xvfb` on Debian or Ubuntu. The usual Chrome locations are found
    automatically; otherwise pass `--chrome PATH`.
-2. **Install the runtime** (macOS or Linux, x64 or arm64):
+2. **Install the runtime.** On Debian or Ubuntu, download `codex-chatgpt-web_<version>_amd64.deb`
+   (or `_arm64.deb`) from the [latest release](https://github.com/miuuyy/codex-chatgpt-web/releases/latest)
+   and install it; apt also installs Xvfb and Chromium:
+
+   ```bash
+   sudo apt install ./codex-chatgpt-web_6.1.14_amd64.deb
+   ```
+
+   On other Linux distributions or macOS (x64 or arm64), use the installer script:
 
    ```bash
    curl -fsSL https://github.com/miuuyy/codex-chatgpt-web/releases/latest/download/install.sh | sh

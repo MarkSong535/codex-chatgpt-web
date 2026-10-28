@@ -136,8 +136,10 @@ summaries, while stable prose between rows becomes native Codex commentary.
 
 The release runtime is a relocatable directory containing a platform-matched pinned Bun executable,
 the bundled CLI, and its production dependencies, described by a manifest of every file's path, size,
-and SHA-256. The terminal installer verifies the archive against the release checksum manifest before
-installing it under `~/.local/lib/codex-chatgpt-web`. No browser is downloaded; Chrome or Chromium is
+and SHA-256. Linux releases also wrap the same runtime in a Debian package that installs it under
+`/opt/codex-chatgpt-web`, links `/usr/bin/codex-chatgpt-web`, and depends on Xvfb. The terminal
+installer verifies the archive against the release checksum manifest before installing it under
+`~/.local/lib/codex-chatgpt-web`. No browser is downloaded; Chrome or Chromium is
 supplied by the host. Full mode separately downloads the official pinned `openai/tunnel-client` build
 for the current OS/architecture and verifies it against the release SHA-256 manifest.
 

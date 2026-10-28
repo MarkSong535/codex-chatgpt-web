@@ -13,7 +13,7 @@ ChatGPT 계정에서 사용할 수 있는 Web 모델(Pro 포함)을 Codex의 기
 ## 시작하기
 
 1. Chrome 또는 Chromium과, Linux에서는 Xvfb를 설치합니다(예: `sudo apt install chromium xvfb`).
-2. 런타임을 설치합니다(macOS 또는 Linux, x64/arm64):
+2. 런타임을 설치합니다. Debian/Ubuntu에서는 최신 릴리스의 `codex-chatgpt-web_<버전>_amd64.deb`(또는 `_arm64.deb`)를 `sudo apt install ./파일.deb`로 설치할 수 있습니다(Xvfb와 Chromium도 함께 설치됩니다). 그 밖의 환경(macOS 또는 Linux, x64/arm64):
 
    ```bash
    curl -fsSL https://github.com/miuuyy/codex-chatgpt-web/releases/latest/download/install.sh | sh
