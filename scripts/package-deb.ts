@@ -57,16 +57,18 @@ try {
     `Architecture: ${debianArch}`,
     `Maintainer: ${maintainer}`,
     `Installed-Size: ${sizeKiB(installRoot) + sizeKiB(docs)}`,
-    // Chrome runs on a private Xvfb display; a browser package is recommended rather than required
-    // because Google Chrome, Debian's chromium and Ubuntu's snap wrapper have different names.
+    // Chrome runs on a private Xvfb display. No browser is pulled in automatically: Ubuntu's
+    // chromium-browser is a confined snap that cannot reach that display, and Google Chrome has no
+    // Linux arm64 build. `codex-chatgpt-web browser install` works everywhere.
     "Depends: xvfb",
-    "Recommends: chromium | google-chrome-stable | chromium-browser",
+    "Suggests: chromium | google-chrome-stable",
     "Section: devel",
     "Priority: optional",
     "Homepage: https://github.com/miuuyy/codex-chatgpt-web",
     "Description: ChatGPT Web models for the native Codex harness",
     " Runs Codex tasks through your ChatGPT web session in Chrome on a private",
-    " virtual display, so no monitor or GPU is needed. Run",
+    " virtual display, so no monitor or GPU is needed. Without Google Chrome or",
+    " Debian's chromium, run `codex-chatgpt-web browser install --with-deps`, then",
     " `codex-chatgpt-web setup --browser-only --email you@example.com` to sign in.",
     "",
   ].join("\n"));

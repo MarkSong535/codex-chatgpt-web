@@ -7,7 +7,10 @@ import {
   resolveChromeGpuMode,
   type ChromeHostFacts,
 } from "../src/chrome-launch";
-import { defaultChromeExecutable } from "../src/config";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { assertChromeExecutable, defaultChromeExecutable, isSnapBrowser, playwrightChromiumExecutable } from "../src/config";
 
 function facts(overrides: Partial<ChromeHostFacts> = {}): ChromeHostFacts {
   return { platform: "linux", env: {}, isRoot: false, hasRenderNode: false, ...overrides };
@@ -88,4 +91,50 @@ test("Playwright options never use headless mode and keep caller arguments last"
 test("Linux Chrome discovery accepts Chromium installs", () => {
   expect(defaultChromeExecutable("linux", undefined, () => false)).toBe("/usr/bin/google-chrome");
   expect(defaultChromeExecutable("linux", undefined, path => path === "/usr/bin/chromium")).toBe("/usr/bin/chromium");
+  expect(defaultChromeExecutable("linux", undefined, path => path === "/usr/local/bin/chromium", "/usr/local/bin:/opt/bin"))
+    .toBe("/usr/local/bin/chromium");
+});
+
+test("a missing browser explains how to install one or point at it", () => {
+  expect(() => assertChromeExecutable("/nonexistent/google-chrome", "linux"))
+    .toThrow("Chrome was not found at /nonexistent/google-chrome. Install Google Chrome (x64) or run `codex-chatgpt-web browser install`");
+  expect(() => assertChromeExecutable("/nonexistent/google-chrome", "linux")).toThrow("--chrome");
+  expect(() => assertChromeExecutable(process.execPath)).not.toThrow();
+});
+
+test("snap browsers are detected and never chosen automatically", () => {
+  const root = mkdtempSync(join(tmpdir(), "codex-chrome-snap-"));
+  try {
+    const shim = join(root, "chromium-browser");
+    writeFileSync(shim, "#!/bin/sh\nif ! [ -x /snap/bin/chromium ]; then\n  exit 1\nfi\nexec /snap/bin/chromium \"$@\"\n");
+    const real = join(root, "chrome");
+    writeFileSync(real, "\u007fELF binary");
+    expect(isSnapBrowser(shim)).toBeTrue();
+    expect(isSnapBrowser("/snap/bin/chromium")).toBeTrue();
+    expect(isSnapBrowser(real)).toBeFalse();
+    expect(defaultChromeExecutable("linux", undefined, path => path === shim, "", join(root, "none"))).toBe("/usr/bin/google-chrome");
+    expect(() => assertChromeExecutable(shim, "linux")).toThrow("is a snap package");
+    expect(() => assertChromeExecutable(shim, "linux")).toThrow("codex-chatgpt-web browser install");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Playwright's Chromium is found after system browsers, newest revision first", () => {
+  const root = mkdtempSync(join(tmpdir(), "codex-chrome-playwright-"));
+  try {
+    for (const [revision, directory] of [["1200", "chrome-linux"], ["1234", "chrome-linux"], ["1300", "chrome-linux64"]] as const) {
+      mkdirSync(join(root, `chromium-${revision}`, directory), { recursive: true });
+      writeFileSync(join(root, `chromium-${revision}`, directory, "chrome"), "binary");
+    }
+    mkdirSync(join(root, "chromium_headless_shell-1300"), { recursive: true });
+    const newest = join(root, "chromium-1300", "chrome-linux64", "chrome");
+    expect(playwrightChromiumExecutable(root)).toBe(newest);
+    const installed = (path: string) => path.startsWith(root) && existsSync(path);
+    expect(defaultChromeExecutable("linux", undefined, installed, "", root)).toBe(newest);
+    expect(defaultChromeExecutable("linux", undefined, path => path === "/usr/bin/chromium" || installed(path), "", root))
+      .toBe("/usr/bin/chromium");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

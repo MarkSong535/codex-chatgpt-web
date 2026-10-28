@@ -12,7 +12,7 @@ ChatGPT アカウントで利用できる Web モデル（Pro を含む）を Co
 
 ## はじめに
 
-1. Chrome または Chromium と、Linux では Xvfb をインストールします（例: `sudo apt install chromium xvfb`）。
+1. ブラウザをインストールします。Debian では `sudo apt install chromium xvfb`。Ubuntu や Linux arm64 などでは、ランタイムをインストールした後に `codex-chatgpt-web browser install --with-deps` を実行します（Ubuntu の snap 版 chromium は使えません）。
 2. ランタイムをインストールします。Debian/Ubuntu では最新リリースの `codex-chatgpt-web_<バージョン>_amd64.deb`（または `_arm64.deb`）を `sudo apt install ./ファイル名.deb` でインストールできます（Xvfb と Chromium も入ります）。その他（macOS または Linux、x64/arm64）:
 
    ```bash

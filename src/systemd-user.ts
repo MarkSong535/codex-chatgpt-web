@@ -52,16 +52,25 @@ WantedBy=default.target
 `;
 }
 
+/** Runs a probe whose tool may not be installed at all (containers often have no systemd). */
+function probe(command: string, args: string[]): { status: number; stdout: string } {
+  try {
+    return runCommand(command, args);
+  } catch {
+    return { status: 127, stdout: "" };
+  }
+}
+
 /** systemctl --user needs a user manager; containers and some SSH sessions have none. */
 export function systemdUserAvailable(): boolean {
   if (process.platform !== "linux") return false;
-  return runCommand("systemctl", ["--user", "show-environment"]).status === 0;
+  return probe("systemctl", ["--user", "show-environment"]).status === 0;
 }
 
 export function systemdUnitStatus(unit: string): SystemdUnitStatus {
   const path = systemdUserUnitPath(unit);
   if (!systemdUserAvailable()) return { supported: false, installed: existsSync(path), active: false, path };
-  const active = runCommand("systemctl", ["--user", "is-active", "--quiet", unit]).status === 0;
+  const active = probe("systemctl", ["--user", "is-active", "--quiet", unit]).status === 0;
   return { supported: true, installed: existsSync(path), active, path };
 }
 
@@ -115,6 +124,6 @@ export function uninstallSystemdUnit(unit: string): void {
 /** Without lingering, systemd stops user services when the last session of the user ends. */
 export function systemdLingerEnabled(user = process.env.USER ?? ""): boolean {
   if (!user) return false;
-  const result = runCommand("loginctl", ["show-user", user, "--property=Linger", "--value"]);
+  const result = probe("loginctl", ["show-user", user, "--property=Linger", "--value"]);
   return result.status === 0 && result.stdout.trim() === "yes";
 }

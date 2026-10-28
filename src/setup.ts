@@ -6,7 +6,9 @@ import type { AppConfig, RuntimeMode, SubagentProtocol } from "./config";
 import type { ChromeGpuMode } from "./chrome-launch";
 import {
   currentRuntimeCommand,
+  defaultChromeExecutable,
   defaultConfig,
+  isSnapBrowser,
   getConfigPath,
   loadConfigForSetup,
   resolveConnectorName,
@@ -230,6 +232,10 @@ function baseConfig(existing: AppConfig | undefined, options: SetupOptions): App
     config.port = options.port;
   }
   if (options.chromeExecutablePath) config.chromeExecutablePath = options.chromeExecutablePath;
+  // A browser installed after the first setup replaces a stale or snap-confined saved path.
+  else if (!existsSync(config.chromeExecutablePath) || isSnapBrowser(config.chromeExecutablePath)) {
+    config.chromeExecutablePath = defaultChromeExecutable();
+  }
   if (options.chromeGpu !== undefined) config.chromeGpu = options.chromeGpu;
   if (options.autoApproveToolCalls !== undefined) config.autoApproveToolCalls = options.autoApproveToolCalls;
   if (options.composerPredictionsEnabled !== undefined) {

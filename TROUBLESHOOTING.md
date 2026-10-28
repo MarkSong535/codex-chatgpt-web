@@ -65,9 +65,14 @@ error, run `codex-chatgpt-web login` again, then `codex-chatgpt-web service rest
 - ChatGPT answers `403` / "Just a moment..." to headless Chrome, which is why this tool never uses
   headless mode. Do not pass `--headless` through `CODEX_CHATGPT_WEB_CHROME_ARGS`.
 - Chrome is found at `/usr/bin/google-chrome`, `google-chrome-stable`, `/opt/google/chrome/chrome`,
-  `chromium`, `chromium-browser` or `/snap/bin/chromium`. Otherwise pass `--chrome PATH` to setup.
-- `browser check` fails with missing shared libraries: install the distribution's Chrome or
-  Chromium package rather than a bare binary, so its dependencies come with it.
+  `chromium` or `chromium-browser`, then on `PATH`, then as the Chromium installed by
+  `codex-chatgpt-web browser install` (`~/.cache/ms-playwright`, or `PLAYWRIGHT_BROWSERS_PATH`).
+  Otherwise pass `--chrome PATH` to setup.
+- `is a snap package` / Chrome reports `Missing X server or $DISPLAY`: Ubuntu's chromium is a confined
+  snap that cannot reach the private display. Run `codex-chatgpt-web browser install --with-deps`
+  (or install Google Chrome on x64), then rerun setup; setup replaces a saved snap path itself.
+- `browser check` fails with missing shared libraries: run `codex-chatgpt-web browser install
+  --with-deps`, or install the distribution's Chrome or Chromium package rather than a bare binary.
 - Rendering problems on a host without a GPU: `--chrome-gpu auto` already selects SwiftShader when
   no `/dev/dri/renderD*` node exists. Force it with `--chrome-gpu software` (or
   `CODEX_CHATGPT_WEB_CHROME_GPU=software`) inside VMs that expose a render node without a real GPU.

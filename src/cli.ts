@@ -1,9 +1,10 @@
 #!/usr/bin/env bun
 import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
 import { createInterface } from "node:readline/promises";
 import { Writable } from "node:stream";
 import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { stdin, stdout } from "node:process";
 import {
   loginWithAccount,
@@ -13,7 +14,14 @@ import {
 } from "./account-login";
 import { checkBrowserEngine, importBrowserLogin } from "./browser-login";
 import { parseChromeGpuMode } from "./chrome-launch";
-import { getConfigDir, getConfigPath, loadConfig, loadConfigForSetup } from "./config";
+import {
+  defaultChromeExecutable,
+  getConfigDir,
+  getConfigPath,
+  loadConfig,
+  loadConfigForSetup,
+  playwrightChromiumExecutable,
+} from "./config";
 import {
   activateCodexIntegration,
   deactivateCodexIntegration,
@@ -54,6 +62,7 @@ Usage:
   codex-chatgpt-web route <status|connect|disconnect>
   codex-chatgpt-web subagents <status|compatibility-v1|native>
   codex-chatgpt-web browser check
+  codex-chatgpt-web browser install [--with-deps]
   codex-chatgpt-web serve
   codex-chatgpt-web mcp [--broker-socket PATH]
   codex-chatgpt-web service <status|install|start|restart|stop|cancel-turns>
@@ -224,6 +233,31 @@ async function loginCommand(args: string[]): Promise<void> {
     : await loginWithAccount(config, await accountLogin());
   stdout.write(`ChatGPT login stored at ${result.storageStatePath}\n`);
   if (getServiceStatus().loaded) stdout.write("Restart the daemon to use it: codex-chatgpt-web service restart\n");
+}
+
+/**
+ * Downloads Playwright's Chromium build for the bundled Playwright version, for hosts without a usable
+ * system Chrome (Linux arm64 has no Google Chrome, and Ubuntu's chromium is a confined snap).
+ */
+async function browserInstallCommand(args: string[]): Promise<void> {
+  const withDeps = takeFlag(args, "--with-deps");
+  assertNoArgs(args);
+  // playwright-core exports its package.json but not cli.js, so locate the installer beside it.
+  const installer = join(dirname(createRequire(import.meta.url).resolve("playwright-core/package.json")), "cli.js");
+  const child = spawn(process.execPath, [installer, "install", "--no-shell", ...(withDeps ? ["--with-deps"] : []), "chromium"], {
+    stdio: "inherit",
+  });
+  const exitCode = await new Promise<number>((resolveExit, rejectExit) => {
+    child.once("error", rejectExit);
+    child.once("exit", (code, signal) => resolveExit(signal ? 1 : code ?? 1));
+  });
+  if (exitCode !== 0) throw new Error(`Chromium installation failed (exit ${exitCode})`);
+  const executable = playwrightChromiumExecutable();
+  if (!executable) throw new Error("The installer finished, but no Playwright Chromium was found");
+  stdout.write(`Chromium is installed at ${executable}.\n`);
+  stdout.write(defaultChromeExecutable() === executable
+    ? "Rerun setup with your usual flags to use it.\n"
+    : `Another browser is preferred automatically; to use this one, rerun setup with --chrome ${executable}\n`);
 }
 
 async function setupCommand(args: string[]): Promise<void> {
@@ -548,11 +582,14 @@ async function main(): Promise<void> {
   else if (command === "subagents") await subagentsCommand(args);
   else if (command === "browser") {
     const action = args.shift();
-    assertNoArgs(args);
-    if (action !== "check") throw new Error("Browser command must be: browser check");
-    const config = loadConfig();
-    await checkBrowserEngine(config);
-    stdout.write("Playwright can launch the configured Chrome executable.\n");
+    if (action === "install") await browserInstallCommand(args);
+    else {
+      assertNoArgs(args);
+      if (action !== "check") throw new Error("Browser command must be: browser check or browser install");
+      const config = loadConfig();
+      await checkBrowserEngine(config);
+      stdout.write("Playwright can launch the configured Chrome executable.\n");
+    }
   } else if (command === "serve") {
     assertNoArgs(args);
     const config = loadConfig();

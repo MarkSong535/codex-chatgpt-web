@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { chromium, type BrowserContext, type Locator, type Page } from "playwright-core";
 import type { AppConfig } from "./config";
-import { atomicWriteFile } from "./config";
+import { assertChromeExecutable, atomicWriteFile } from "./config";
 import { chromeLaunchOptions } from "./chrome-launch";
 import {
   CHATGPT_COMPOSER_SELECTOR,
@@ -233,6 +233,7 @@ export async function loginWithAccount(
   if (!/^[^\s@]+@[^\s@]+$/.test(email)) throw new Error("A ChatGPT account email address is required");
   if (!input.password) throw new Error("A ChatGPT account password is required");
   const totp: TotpParameters | undefined = input.totpSecret ? parseTotpSecret(input.totpSecret) : undefined;
+  assertChromeExecutable(config.chromeExecutablePath);
 
   const total = ACCOUNT_LOGIN_STEPS.length;
   let reported = 0;

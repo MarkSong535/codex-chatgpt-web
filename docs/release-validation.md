@@ -33,7 +33,9 @@ Run this list on a Linux x64 server without a display or GPU, and repeat items 1
 
 1. Install the `.deb` with `apt` on a clean Debian or Ubuntu host and prove that it pulls in Xvfb
    and a browser, and that `codex-chatgpt-web --version`, `browser check`, and `doctor`'s display
-   check succeed. Repeat with `install.sh` on another distribution.
+   check succeed. Repeat with `install.sh` on another distribution, and on Ubuntu arm64 with only
+   the snap `chromium-browser` present, prove that `browser install --with-deps` provides a browser
+   that setup selects automatically.
 2. Run setup with an account that has an authenticator: once typing the code, once with
    `--totp-secret-file`. Prove that every `[n/7]` step is reported and a new chat is verified.
 3. Repeat sign-in with an account that receives an email code and prove the code is requested in the

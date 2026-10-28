@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, mkdirSync, openSync, closeSync, fsyncSync, renameSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { chmodSync, mkdirSync, openSync, closeSync, fsyncSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, resolve, sep, win32 } from "node:path";
 import { tmpdir } from "node:os";
@@ -316,13 +316,55 @@ const LINUX_CHROME_CANDIDATES = [
   "/opt/google/chrome/chrome",
   "/usr/bin/chromium",
   "/usr/bin/chromium-browser",
-  "/snap/bin/chromium",
 ] as const;
+
+const LINUX_CHROME_COMMANDS = ["google-chrome-stable", "google-chrome", "chromium", "chromium-browser"] as const;
+
+/**
+ * Snap packages (Ubuntu's chromium and its /usr/bin/chromium-browser shim) are confined and cannot
+ * reach the private Xvfb display, so they are never chosen automatically.
+ */
+export function isSnapBrowser(path: string): boolean {
+  if (path.startsWith("/snap/")) return true;
+  try {
+    if (statSync(path).size > 16 * 1024) return false;
+    return readFileSync(path, "utf8").includes("/snap/bin/");
+  } catch {
+    return false;
+  }
+}
+
+/** Where `codex-chatgpt-web browser install` (Playwright's installer) puts its Chromium. */
+export function playwrightBrowsersRoot(env: NodeJS.ProcessEnv = process.env): string {
+  const configured = env.PLAYWRIGHT_BROWSERS_PATH?.trim();
+  return configured && configured !== "0" ? resolve(expandUserPath(configured)) : join(homedir(), ".cache", "ms-playwright");
+}
+
+function playwrightChromiumCandidates(root: string): string[] {
+  let entries: string[];
+  try {
+    entries = readdirSync(root);
+  } catch {
+    return [];
+  }
+  return entries
+    .map(name => /^chromium-(\d+)$/.exec(name))
+    .filter((match): match is RegExpExecArray => match !== null)
+    .sort((left, right) => Number(right[1]) - Number(left[1]))
+    .flatMap(match => ["chrome-linux", "chrome-linux64"].map(directory => join(root, match[0], directory, "chrome")));
+}
+
+/** The newest Chromium installed by `codex-chatgpt-web browser install`, if any. */
+export function playwrightChromiumExecutable(root = playwrightBrowsersRoot()): string | undefined {
+  return playwrightChromiumCandidates(root).find(candidate => existsSync(candidate));
+}
 
 export function defaultChromeExecutable(
   platform = process.platform,
   programFiles = process.env.PROGRAMFILES,
   exists: (path: string) => boolean = existsSync,
+  pathValue = process.env.PATH ?? "",
+  playwrightRoot = playwrightBrowsersRoot(),
 ): string {
   if (platform === "darwin") {
     return "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -330,7 +372,27 @@ export function defaultChromeExecutable(
   if (platform === "win32") {
     return win32.join(programFiles || "C:\\Program Files", "Google", "Chrome", "Application", "chrome.exe");
   }
-  return LINUX_CHROME_CANDIDATES.find(candidate => exists(candidate)) ?? LINUX_CHROME_CANDIDATES[0];
+  const onPath = pathValue.split(delimiter).filter(Boolean)
+    .flatMap(directory => LINUX_CHROME_COMMANDS.map(command => join(directory, command)));
+  return [...LINUX_CHROME_CANDIDATES, ...onPath, ...playwrightChromiumCandidates(playwrightRoot)]
+    .find(candidate => exists(candidate) && !isSnapBrowser(candidate)) ?? LINUX_CHROME_CANDIDATES[0];
+}
+
+const LINUX_BROWSER_HELP = "Install Google Chrome (x64) or run `codex-chatgpt-web browser install` (any architecture)";
+
+/** Fails with install guidance instead of letting Playwright report a bare missing executable. */
+export function assertChromeExecutable(path: string, platform = process.platform): void {
+  if (platform === "linux" && isSnapBrowser(path)) {
+    throw new Error(
+      `${path} is a snap package, whose confinement stops it from reaching the private display. `
+      + `${LINUX_BROWSER_HELP}, then rerun setup.`,
+    );
+  }
+  if (existsSync(path)) return;
+  const install = platform === "linux" ? LINUX_BROWSER_HELP : "Install Google Chrome";
+  throw new Error(
+    `Chrome was not found at ${path}. ${install}, then rerun setup, or pass --chrome with the browser's executable path.`,
+  );
 }
 
 export function loadConfig(): AppConfig {

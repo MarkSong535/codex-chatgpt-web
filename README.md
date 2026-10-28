@@ -27,22 +27,31 @@ or Linux desktop. (ChatGPT rejects headless Chrome, so Chrome is never run in he
 with **Instant–High**, plus **Extra High** and **Pro** when available. Availability depends on your
 account and workspace.
 
-1. **Install Chrome or Chromium, and on Linux Xvfb.** For example
-   `sudo apt install chromium xvfb` on Debian or Ubuntu. The usual Chrome locations are found
-   automatically; otherwise pass `--chrome PATH`.
-2. **Install the runtime.** On Debian or Ubuntu, download `codex-chatgpt-web_<version>_amd64.deb`
+1. **Install the runtime.** On Debian or Ubuntu, download `codex-chatgpt-web_<version>_amd64.deb`
    (or `_arm64.deb`) from the [latest release](https://github.com/MarkSong535/codex-chatgpt-web/releases/latest)
-   and install it; apt also installs Xvfb and Chromium:
+   and install it; apt also installs Xvfb:
 
    ```bash
    sudo apt install ./codex-chatgpt-web_1.0.0_amd64.deb
    ```
 
-   On other Linux distributions or macOS (x64 or arm64), use the installer script:
+   On other Linux distributions or macOS (x64 or arm64), use the installer script, and on Linux also
+   install Xvfb:
 
    ```bash
    curl -fsSL https://github.com/MarkSong535/codex-chatgpt-web/releases/latest/download/install.sh | sh
    ```
+
+2. **Install a browser.** On Debian, `sudo apt install chromium`; on Linux x64, Google Chrome's
+   `.deb`; on macOS, Google Chrome. On Ubuntu, Linux arm64, or anywhere else, install the Chromium
+   build that matches this tool (`--with-deps` also installs its system libraries through `sudo`):
+
+   ```bash
+   codex-chatgpt-web browser install --with-deps
+   ```
+
+   Ubuntu's `chromium-browser` is a snap; its confinement keeps it off the private display, so it is
+   skipped. The browser is found automatically; otherwise pass `--chrome PATH` to setup.
 
 3. **Set up and sign in.** Setup asks for anything you leave out, shows each sign-in step, and
    asks for the two-factor code when OpenAI requests one:

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { chromium, type BrowserContext, type BrowserContextOptions } from "playwright-core";
 import type { AppConfig } from "./config";
-import { atomicWriteFile } from "./config";
+import { assertChromeExecutable, atomicWriteFile } from "./config";
 import { chromeLaunchOptions } from "./chrome-launch";
 import {
   assertAuthenticatedChatGptPage,
@@ -161,9 +161,7 @@ function isStorageStateFile(value: unknown): value is BrowserLoginStorageState {
  * automated. The state is reduced to ChatGPT/OpenAI cookies and verified before use.
  */
 export async function importBrowserLogin(config: AppConfig, sourcePath: string): Promise<BrowserLoginResult> {
-  if (!existsSync(config.chromeExecutablePath)) {
-    throw new Error(`Google Chrome was not found at ${config.chromeExecutablePath}. Pass --chrome with its executable path.`);
-  }
+  assertChromeExecutable(config.chromeExecutablePath);
   let raw: unknown;
   try {
     raw = JSON.parse(readFileSync(sourcePath, "utf8"));
@@ -200,7 +198,7 @@ export function browserLoginStateExists(config: AppConfig): boolean {
 }
 
 export async function checkBrowserEngine(config: AppConfig): Promise<void> {
-  if (!existsSync(config.chromeExecutablePath)) throw new Error(`Google Chrome was not found at ${config.chromeExecutablePath}`);
+  assertChromeExecutable(config.chromeExecutablePath);
   const browser = await chromium.launch(
     await chromeLaunchOptions(config.chromeExecutablePath, config.chromeGpu, ["--no-first-run", "--no-default-browser-check"]),
   );

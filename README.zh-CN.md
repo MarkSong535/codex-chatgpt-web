@@ -12,7 +12,7 @@
 
 ## 快速开始
 
-1. 安装 Chrome 或 Chromium，在 Linux 上还需安装 Xvfb（例如 `sudo apt install chromium xvfb`）。
+1. 安装浏览器：Debian 上 `sudo apt install chromium xvfb`；Ubuntu、Linux arm64 等其他情况下，先安装运行时，再运行 `codex-chatgpt-web browser install --with-deps`（Ubuntu 的 snap 版 chromium 无法使用）。
 2. 安装运行时。Debian/Ubuntu 上可从最新发行版下载 `codex-chatgpt-web_<版本>_amd64.deb`（或 `_arm64.deb`），用 `sudo apt install ./文件名.deb` 安装（会同时安装 Xvfb 和 Chromium）。其他系统（macOS 或 Linux，x64/arm64）：
 
    ```bash

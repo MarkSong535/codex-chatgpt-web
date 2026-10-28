@@ -9,6 +9,7 @@ import { readChatGptUserMessage } from "./browser-user-message";
 import { skillFileTokens, validateSkillFiles } from "./skill-attachments";
 import { chromium, type Browser, type BrowserContext, type JSHandle, type Locator, type Page, type Request, type Response } from "playwright-core";
 import {
+  assertChromeExecutable,
   atomicWriteFile,
   CHATGPT_CONNECTOR_NAME,
   defaultChromeExecutable,
@@ -2164,9 +2165,7 @@ export class ChatGptBrowserWorker {
       if (!existsSync(this.config.storageStatePath) || !existsSync(loginVerificationMarkerPath(this.config.storageStatePath))) {
         throw new Error(`ChatGPT web login state is missing: ${this.config.storageStatePath}`);
       }
-      if (!existsSync(this.config.chromeExecutablePath)) {
-        throw new Error(`Configured Chrome executable does not exist: ${this.config.chromeExecutablePath}`);
-      }
+      assertChromeExecutable(this.config.chromeExecutablePath);
       const browser = await this.launchManagedChrome();
       const context = await browser.newContext({ storageState: this.config.storageStatePath });
       this.browser = browser;
