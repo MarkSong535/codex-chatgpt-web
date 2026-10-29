@@ -225,12 +225,13 @@ function takeAccountLoginOptions(args: string[]): () => Promise<AccountLoginInpu
 
 async function loginCommand(args: string[]): Promise<void> {
   const importPath = takeOption(args, "--import-login");
+  const headless = takeFlag(args, "--headless");
   const accountLogin = takeAccountLoginOptions(args);
   assertNoArgs(args);
   const config = loadConfig();
   const result = importPath
     ? await importBrowserLogin(config, resolve(importPath))
-    : await loginWithAccount(config, await accountLogin());
+    : await loginWithAccount(config, await accountLogin(), headless ? { headless: true } : {});
   stdout.write(`ChatGPT login stored at ${result.storageStatePath}\n`);
   if (getServiceStatus().loaded) stdout.write("Restart the daemon to use it: codex-chatgpt-web service restart\n");
 }

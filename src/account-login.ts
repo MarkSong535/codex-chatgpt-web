@@ -4,6 +4,7 @@ import { chromium, type BrowserContext, type Locator, type Page } from "playwrig
 import type { AppConfig } from "./config";
 import { assertChromeExecutable, atomicWriteFile } from "./config";
 import { chromeLaunchOptions } from "./chrome-launch";
+import { headlessChromeUserAgent, launchHeadlessChrome } from "./headless-chrome";
 import {
   CHATGPT_COMPOSER_SELECTOR,
   CHATGPT_NEW_CHAT_URL,
@@ -225,7 +226,11 @@ export async function loginWithAccount(
     prepareContext?: (context: BrowserContext) => Promise<void>;
     /** How long the post-sign-in model probe waits for ChatGPT's model control. */
     capabilityProbeTimeoutMs?: number;
-    /** Local fixtures only: ChatGPT itself rejects headless Chrome. */
+    /**
+     * Run Chrome with `--headless=new` over CDP instead of a visible window. This clears
+     * ChatGPT's Cloudflare interstitial (Playwright's own `headless: true` does not) and also
+     * serves local test fixtures, which have no bot protection either way.
+     */
     headless?: boolean;
   } = {},
 ): Promise<BrowserLoginResult> {
@@ -264,11 +269,25 @@ export async function loginWithAccount(
   };
 
   reach(1);
-  const browser = await chromium.launch(dependencies.headless
-    ? { executablePath: config.chromeExecutablePath, headless: true }
-    : await chromeLaunchOptions(config.chromeExecutablePath, config.chromeGpu, ["--no-first-run", "--no-default-browser-check"]));
+  let closeHeadless: (() => Promise<void>) | undefined;
+  const browser = dependencies.headless
+    ? await (async () => {
+        const headless = await launchHeadlessChrome({
+          executablePath: config.chromeExecutablePath,
+          gpu: config.chromeGpu,
+          args: ["--no-sandbox"],
+        });
+        closeHeadless = headless.close;
+        return headless.browser;
+      })()
+    : await chromium.launch(await chromeLaunchOptions(config.chromeExecutablePath, config.chromeGpu, ["--no-first-run", "--no-default-browser-check"]));
   try {
-    const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: "en-US" });
+    const context = await browser.newContext({
+      viewport: { width: 1280, height: 900 },
+      locale: "en-US",
+      // Headless Chrome advertises "HeadlessChrome" in its user agent; Cloudflare reads it.
+      ...(dependencies.headless ? { userAgent: headlessChromeUserAgent() } : {}),
+    });
     await dependencies.prepareContext?.(context);
     const page = await context.newPage();
     reach(2);
@@ -398,5 +417,6 @@ export async function loginWithAccount(
     };
   } finally {
     await browser.close().catch(() => {});
+    await closeHeadless?.();
   }
 }

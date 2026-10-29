@@ -32,7 +32,7 @@ account and workspace.
    and install it; apt also installs Xvfb:
 
    ```bash
-   sudo apt install ./codex-chatgpt-web_1.0.1_amd64.deb
+   sudo apt install ./codex-chatgpt-web_1.0.2_amd64.deb
    ```
 
    On other Linux distributions or macOS (x64 or arm64), use the installer script, and on Linux also
